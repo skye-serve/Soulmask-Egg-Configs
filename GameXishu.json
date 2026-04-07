@@ -130,8 +130,6 @@
 		"PVP_ShangHaiRatio_PlayerToPlayer_YouFang": 0.059999998658895493,
 		"BaoXiangDiaoLuoDengJi": 0,
 		"KaiQiKuaFu": 0,
-		"KuaFuServerId": 1,
-		"KuaFuGroupId": 50,
 		"FuHuaSpeed": 1,
 		"YingHuoRanShaoSuDuRatio": 1,
 		"HuDongExcludeBetweenCameraCharacter": 1,
@@ -214,7 +212,9 @@
 		"JianZhuMirageKaiGuan": 1,
 		"MaxConveyorCount": 1000,
 		"MaxDongLiKuangChangCount": 10,
-		"IgnoreEnemyJianZhuInSelfYingHuo": 1
+		"IgnoreEnemyJianZhuInSelfYingHuo": 1,
+        "KuaFuServerId": 1,
+		"KuaFuGroupId": 50
 	},
 	"1":
 	{
@@ -347,8 +347,6 @@
 		"PVP_ShangHaiRatio_PlayerToPlayer_YouFang": 0.059999998658895493,
 		"BaoXiangDiaoLuoDengJi": 0,
 		"KaiQiKuaFu": 0,
-		"KuaFuServerId": 1,
-		"KuaFuGroupId": 50,
 		"FuHuaSpeed": 1,
 		"YingHuoRanShaoSuDuRatio": 1,
 		"HuDongExcludeBetweenCameraCharacter": 1,
@@ -431,7 +429,9 @@
 		"JianZhuMirageKaiGuan": 1,
 		"MaxConveyorCount": 1000,
 		"MaxDongLiKuangChangCount": 10,
-		"IgnoreEnemyJianZhuInSelfYingHuo": 1
+		"IgnoreEnemyJianZhuInSelfYingHuo": 1,
+        "KuaFuServerId": 1,
+		"KuaFuGroupId": 50
 	},
 	"2":
 	{
@@ -564,8 +564,6 @@
 		"PVP_ShangHaiRatio_PlayerToPlayer_YouFang": 0.059999998658895493,
 		"BaoXiangDiaoLuoDengJi": 0,
 		"KaiQiKuaFu": 0,
-		"KuaFuServerId": 1,
-		"KuaFuGroupId": 50,
 		"FuHuaSpeed": 1,
 		"YingHuoRanShaoSuDuRatio": 1,
 		"HuDongExcludeBetweenCameraCharacter": 1,
@@ -648,6 +646,8 @@
 		"JianZhuMirageKaiGuan": 1,
 		"MaxConveyorCount": 1000,
 		"MaxDongLiKuangChangCount": 10,
-		"IgnoreEnemyJianZhuInSelfYingHuo": 1
+		"IgnoreEnemyJianZhuInSelfYingHuo": 1,
+        "KuaFuServerId": 1,
+		"KuaFuGroupId": 50
 	}
 }
