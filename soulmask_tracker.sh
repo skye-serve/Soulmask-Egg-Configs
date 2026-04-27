@@ -1,22 +1,23 @@
 #!/bin/bash
 
-# Configuration
 LOG_FILE="WS/Saved/Logs/WS.log"
 MSG_ID_FILE="discord_message_id.txt"
 LIST_FILE="current_players.tmp"
 
-# Clean up on fresh boot
+# Kill any other tracker processes that might be hanging around
+pkill -f tracker.sh
+
+# Fresh start
 rm -f "$MSG_ID_FILE"
 echo "" > "$LIST_FILE"
-echo "--- Tracker Started $(date) ---" > tracker_debug.log
+echo "--- Tracker Nuclear Reset Started $(date) ---" > tracker_debug.log
 
-# Map Name Translation
 if [ "$SERVER_MAP" == "Level01_Main" ]; then
     DISPLAY_MAP="Cloud Mist Forest"
 elif [ "$SERVER_MAP" == "DLC_Level01_Main" ]; then
     DISPLAY_MAP="Shifting Sands"
 else
-    DISPLAY_MAP="${SERVER_MAP:-Unknown Realm}"
+    DISPLAY_MAP="${SERVER_MAP:-Cloud Mist Forest}"
 fi
 
 # --- Background Listener ---
@@ -25,27 +26,22 @@ tail -F -n 0 "$LOG_FILE" 2>/dev/null | while read -r line; do
         NAME=$(echo "$line" | sed 's/.*Join succeeded: //' | tr -d '\r\n"' | tr -d "'")
         if ! grep -q "^$NAME$" "$LIST_FILE"; then
             echo "$NAME" >> "$LIST_FILE"
-            echo "[LOG] Player Joined: $NAME" >> tracker_debug.log
         fi
     fi
-
     if [[ "$line" == *"logged out"* ]] || [[ "$line" == *"ClosePort"* ]]; then
         while read -r p_name; do
             if [[ "$line" == *"$p_name"* ]]; then
                 sed -i "/^$p_name$/d" "$LIST_FILE"
-                echo "[LOG] Player Left: $p_name" >> tracker_debug.log
             fi
         done < "$LIST_FILE"
     fi
 done &
 
-# --- Main Discord Update Loop ---
+# --- Main Update Loop ---
 while true; do
     players_online=$(grep -c . "$LIST_FILE" || echo "0")
     FINAL_LIST=$(paste -sd ", " "$LIST_FILE")
     [ -z "$FINAL_LIST" ] && FINAL_LIST="None online"
-
-    # Escape quotes in Server Name for JSON safety
     CLEAN_SERVER_NAME=$(echo "${SERVER_NAME:-Soulmask Server}" | tr -d '"')
 
     JSON_PAYLOAD=$(cat <<EOF
@@ -67,28 +63,29 @@ EOF
 )
 
     if [ ! -s "$MSG_ID_FILE" ]; then
-        # TRY TO POST NEW MESSAGE
+        # INITIAL POST
+        echo "[STEP 1] Attempting to send initial message..." >> tracker_debug.log
         RESPONSE=$(curl -s -X POST -H "Content-Type: application/json" -d "$JSON_PAYLOAD" "${DISCORD_WEBHOOK}?wait=true")
         
-        # Only save the ID if it actually looks like a Snowflake ID (numbers only)
-        NEW_ID=$(echo "$RESPONSE" | grep -oP '"id": "\K[0-9]+')
+        # Robust ID extraction using sed
+        NEW_ID=$(echo "$RESPONSE" | sed -n 's/.*"id": "\([0-9]*\)".*/\1/p')
         
-        if [ -n "$NEW_ID" ]; then
+        if [[ "$NEW_ID" =~ ^[0-9]+$ ]]; then
             echo "$NEW_ID" > "$MSG_ID_FILE"
-            echo "[DISCORD] Successfully created new status board: $NEW_ID" >> tracker_debug.log
+            echo "[STEP 2] Success! Message ID: $NEW_ID" >> tracker_debug.log
         else
-            echo "[ERROR] Discord rejected the message! Response: $RESPONSE" >> tracker_debug.log
+            echo "[ERROR] Discord rejection: $RESPONSE" >> tracker_debug.log
         fi
     else
-        # EDIT EXISTING MESSAGE
+        # PERIODIC UPDATE
         MESSAGE_ID=$(cat "$MSG_ID_FILE")
         HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X PATCH -H "Content-Type: application/json" -d "$JSON_PAYLOAD" "${DISCORD_WEBHOOK}/messages/${MESSAGE_ID}")
         
         if [ "$HTTP_CODE" != "200" ] && [ "$HTTP_CODE" != "204" ]; then
-            echo "[ERROR] Update failed (HTTP $HTTP_CODE). Clearing ID to try a fresh message..." >> tracker_debug.log
+            echo "[ERROR] Patch failed (HTTP $HTTP_CODE). Retrying fresh message..." >> tracker_debug.log
             rm -f "$MSG_ID_FILE"
         else
-            echo "[DEBUG] Updated board at $(date +'%T')" >> tracker_debug.log
+            echo "[SUCCESS] Board updated at $(date +'%T')" >> tracker_debug.log
         fi
     fi
 
