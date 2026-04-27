@@ -7,8 +7,8 @@ LIST_FILE="current_players.tmp"
 MAP_FILE="steam_id_map.tmp"
 
 # --- BRANDING ---
-BOT_NAME="Skye Serve Soulmask Monitor"
-BOT_LOGO="https://raw.githubusercontent.com/skye-serve/Soulmask-Egg-Configs/refs/heads/main/78691e4f-a6fd-4d12-ae6d-218f3a9c705c.jpg"
+BOT_NAME="${BOT_NAME:-Skye Serve Monitor}"
+BOT_LOGO="${BOT_LOGO:-https://raw.githubusercontent.com/parkervcp/pterodactyl-images/master/logos/soulmask.png}"
 
 # Kill ghost processes
 pkill -f tracker.sh
@@ -19,32 +19,30 @@ rm -f "payload.json"
 > "$LIST_FILE" 
 touch "$MAP_FILE"
 
-echo "--- Soulmask Final Sync Started: $(date) ---" > tracker_debug.log
+echo "--- Ghost Buster Sync Started: $(date) ---" > tracker_debug.log
 
-# 2. THE NEW MAPPING LOGIC
-# This specifically looks for the 'player ready' line you found
+# 2. MAPPING LOGIC (Now with strict carriage-return removal)
 update_mapping() {
     local raw_line="$1"
     if [[ "$raw_line" == *"player ready."* ]]; then
-        # Extract SteamID (Netuid)
-        local t_id=$(echo "$raw_line" | sed -n 's/.*Netuid:\([0-9]*\).*/\1/p')
-        # Extract Name
-        local t_name=$(echo "$raw_line" | sed -n 's/.*Name:\(.*\)/\1/p' | xargs)
+        local t_id=$(echo "$raw_line" | sed -n 's/.*Netuid:\([0-9]*\).*/\1/p' | tr -d '\r\n ')
+        
+        # The 'tr -d '\r\n'' is the magic bullet here. It strips hidden line breaks.
+        local t_name=$(echo "$raw_line" | sed -n 's/.*Name:\(.*\)/\1/p' | tr -d '\r\n' | xargs)
         
         if [ -n "$t_name" ] && [ -n "$t_id" ]; then
-            # We overwrite any old mapping for this ID to ensure it's current
             grep -vx "^$t_id:.*" "$MAP_FILE" > "${MAP_FILE}.new" 2>/dev/null
             mv "${MAP_FILE}.new" "$MAP_FILE" 2>/dev/null
             echo "$t_id:$t_name" >> "$MAP_FILE"
-            echo "[MAP] Linked $t_name to $t_id" >> tracker_debug.log
+            # Added quotes around the name in debug so we can visibly see if any spaces sneak in
+            echo "[MAP] Linked '$t_name' to '$t_id'" >> tracker_debug.log
         fi
     fi
 }
 
-# 3. PRE-SCAN: Scan history to learn who everyone is
+# 3. PRE-SCAN
 while read -r line; do update_mapping "$line"; done < "$LOG_FILE"
 
-# Map Name Translation
 if [ "$SERVER_MAP" == "Level01_Main" ]; then
     DISPLAY_MAP="Cloud Mist Forest"
 elif [ "$SERVER_MAP" == "DLC_Level01_Main" ]; then
@@ -56,33 +54,36 @@ fi
 # --- Background Listener ---
 tail -F -n 0 "$LOG_FILE" 2>/dev/null | while read -r line; do
     
-    # A. Mapping Event (Player Ready)
     update_mapping "$line"
 
-    # B. Join Event
     if [[ "$line" == *"Join succeeded:"* ]]; then
-        NAME=$(echo "$line" | sed 's/.*Join succeeded: //' | tr -dc '[:print:]' | tr -d '"' | tr -d "'" | xargs)
+        # Strict formatting for joining names too
+        NAME=$(echo "$line" | sed 's/.*Join succeeded: //' | tr -d '\r\n' | tr -d '"' | tr -d "'" | xargs)
         if [ -n "$NAME" ] && ! grep -qx "$NAME" "$LIST_FILE"; then
             echo "$NAME" >> "$LIST_FILE"
-            echo "[JOIN] $NAME online" >> tracker_debug.log
+            echo "[JOIN] '$NAME' online" >> tracker_debug.log
         fi
     fi
 
-    # C. Leave Event (Using SteamID)
     if [[ "$line" == *"player leave world."* ]]; then
         LEAVE_ID=$(echo "$line" | grep -oE '[0-9]{17}')
         if [ -n "$LEAVE_ID" ]; then
-            P_NAME=$(grep "^$LEAVE_ID:" "$MAP_FILE" | cut -d':' -f2 | tail -n 1)
+            # Extract name and strip carriage returns one last time
+            P_NAME=$(grep "^$LEAVE_ID:" "$MAP_FILE" | cut -d':' -f2 | tail -n 1 | tr -d '\r\n' | xargs)
             
             if [ -n "$P_NAME" ]; then
                 grep -vx "$P_NAME" "$LIST_FILE" > "${LIST_FILE}.new" && mv "${LIST_FILE}.new" "$LIST_FILE"
-                echo "[LEAVE] Removed $P_NAME ($LEAVE_ID)" >> tracker_debug.log
+                echo "[LEAVE] Removed '$P_NAME' ($LEAVE_ID)" >> tracker_debug.log
+                
+                # EXTRA SAFEGUARD: If grep fails, we use sed to force delete them
+                if grep -qx "$P_NAME" "$LIST_FILE"; then
+                    sed -i "/$P_NAME/d" "$LIST_FILE"
+                fi
             else
-                # FALLBACK: If only 1 person is on, clear them.
                 ONLINE_COUNT=$(grep -c "[^[:space:]]" "$LIST_FILE")
                 if [ "$ONLINE_COUNT" -le 1 ]; then
                     > "$LIST_FILE"
-                    echo "[LEAVE] Mapping missing, cleared list anyway." >> tracker_debug.log
+                    echo "[LEAVE] Mapping missing, cleared list." >> tracker_debug.log
                 fi
             fi
         fi
@@ -91,7 +92,6 @@ done &
 
 # --- Main Discord Loop ---
 while true; do
-    # Get player count as a single clean number
     PLAYERS=$(grep -c "[^[:space:]]" "$LIST_FILE" | awk '{print $1}')
     [ -z "$PLAYERS" ] && PLAYERS=0
 
