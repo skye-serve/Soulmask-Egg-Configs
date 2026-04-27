@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Define the log path directly
+# Path to the log
 LOG_FILE="WS/Saved/Logs/WS.log"
 
 # Wait for the server to create the log file
@@ -8,18 +8,23 @@ while [ ! -f "$LOG_FILE" ]; do
     sleep 5
 done
 
-echo "Tailing log: $LOG_FILE"
+echo "Monitoring log: $LOG_FILE"
 
-# The most reliable way to watch a log in Linux:
-tail -F --line-buffered "$LOG_FILE" | grep --line-buffered "Join succeeded:" | while read -r line; do
+# Standard tail -F works on all versions of Linux
+# It will watch the file and pass every new line to the loop
+tail -F "$LOG_FILE" | while read -r line; do
     
-    # 1. Extract the name and strip EVERY possible hidden character (newlines, returns, quotes)
-    PLAYER_NAME=$(echo "$line" | sed 's/.*Join succeeded: //' | tr -d '\r\n\"'\''')
-    
-    # 2. Fire a simple text message (Not an embed, just to test connection)
-    # This is much harder for Discord to reject as "Invalid JSON"
-    curl -X POST -H "Content-Type: application/json" \
-         -d "{\"content\": \"🟢 **$PLAYER_NAME** has joined the Soulmask server!\"}" \
-         "$DISCORD_WEBHOOK"
-         
+    # Check if the line contains the join message
+    if [[ "$line" == *"Join succeeded:"* ]]; then
+        
+        # Extract name and clean it
+        PLAYER_NAME=$(echo "$line" | sed 's/.*Join succeeded: //' | tr -d '\r\n\"'\'')
+        
+        # Send simple message to Discord
+        curl -s -X POST -H "Content-Type: application/json" \
+             -d "{\"content\": \"🟢 **$PLAYER_NAME** has joined the Soulmask server!\"}" \
+             "$DISCORD_WEBHOOK"
+             
+        echo "Sent join for: $PLAYER_NAME"
+    fi
 done
