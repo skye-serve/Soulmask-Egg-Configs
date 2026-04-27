@@ -10,7 +10,7 @@ pkill -f tracker.sh
 # Fresh start
 rm -f "$MSG_ID_FILE"
 echo "" > "$LIST_FILE"
-echo "--- Final Pro Tracker Started: $(date) ---" > tracker_debug.log
+echo "--- Pro Tracker Final Fix: $(date) ---" > tracker_debug.log
 
 # Map Name Translation
 if [ "$SERVER_MAP" == "Level01_Main" ]; then
@@ -38,7 +38,7 @@ tail -F -n 0 "$LOG_FILE" 2>/dev/null | while read -r line; do
     fi
 done &
 
-# --- Safe JSON Builder Function ---
+# --- Safe JSON Builder ---
 build_json() {
     local s_name="$1"
     local map="$2"
@@ -66,27 +66,27 @@ EOF
 
 # --- Main Update Loop ---
 while true; do
-    # Prepare Data
     CLEAN_SNAME=$(echo "${SERVER_NAME:-Soulmask Server}" | tr -d '"' | tr -dc '[:print:]')
     CLEAN_MAP=$(echo "$DISPLAY_MAP" | tr -d '"')
-    PLAYERS=$(grep -c . "$LIST_FILE" || echo "0")
-    CLEAN_LIST=$(paste -sd ", " "$LIST_FILE" | tr -d '"' | tr -dc '[:print:]')
+    PLAYERS=$(grep -c "[^[:space:]]" "$LIST_FILE" || echo "0")
+    CLEAN_LIST=$(paste -sd ", " "$LIST_FILE" | tr -d '"' | tr -dc '[:print:]' | sed 's/^, //')
     [ -z "$CLEAN_LIST" ] && CLEAN_LIST="None online"
     CUR_TIME=$(date +'%T')
 
-    # Build Payload to a file (safest way)
     build_json "$CLEAN_SNAME" "$CLEAN_MAP" "$PLAYERS" "$CLEAN_LIST" "$CUR_TIME" > payload.json
 
     if [ ! -s "$MSG_ID_FILE" ]; then
         # INITIAL SEND
         RESPONSE=$(curl -s -X POST -H "Content-Type: application/json" -d @payload.json "${DISCORD_WEBHOOK}?wait=true")
-        NEW_ID=$(echo "$RESPONSE" | sed -n 's/.*"id": "\([0-9]*\)".*/\1/p')
+        
+        # FIXED: Removed the space after "id": to match Discord's actual response
+        NEW_ID=$(echo "$RESPONSE" | sed -n 's/.*"id":"\([0-9]*\)".*/\1/p')
         
         if [[ "$NEW_ID" =~ ^[0-9]+$ ]]; then
             echo "$NEW_ID" > "$MSG_ID_FILE"
             echo "[SUCCESS] Created Message: $NEW_ID" >> tracker_debug.log
         else
-            echo "[ERROR] Discord rejected JSON. Response: $RESPONSE" >> tracker_debug.log
+            echo "[ERROR] Could not parse ID from: $RESPONSE" >> tracker_debug.log
         fi
     else
         # EDIT
