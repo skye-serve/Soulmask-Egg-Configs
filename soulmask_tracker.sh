@@ -11,14 +11,13 @@ done
 echo "Monitoring log: $LOG_FILE"
 
 # Standard tail -F works on all versions of Linux
-# It will watch the file and pass every new line to the loop
 tail -F "$LOG_FILE" | while read -r line; do
     
     # Check if the line contains the join message
     if [[ "$line" == *"Join succeeded:"* ]]; then
         
-        # Extract name and clean it
-        PLAYER_NAME=$(echo "$line" | sed 's/.*Join succeeded: //' | tr -d '\r\n\"'\'')
+        # Extract name and strip hidden characters, double quotes, and single quotes safely
+        PLAYER_NAME=$(echo "$line" | sed 's/.*Join succeeded: //' | tr -d '\r\n"' | tr -d "'")
         
         # Send simple message to Discord
         curl -s -X POST -H "Content-Type: application/json" \
