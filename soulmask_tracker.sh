@@ -6,15 +6,19 @@ MSG_ID_FILE="discord_message_id.txt"
 LIST_FILE="current_players.tmp"
 
 # --- BRANDING ---
-# Change these to your own logo and name!
 BOT_NAME="Skye Serve Soulmask Monitor"
 BOT_LOGO="https://raw.githubusercontent.com/skye-serve/Soulmask-Egg-Configs/refs/heads/main/78691e4f-a6fd-4d12-ae6d-218f3a9c705c.jpg"
 
-# Kill any existing tracker processes
+# Kill any ghost processes
 pkill -f tracker.sh
+
+# 1. TOTAL RESET: Wipe the player list and message ID on every boot
+# This ensures we start with 0 players and a fresh Discord message
 rm -f "$MSG_ID_FILE"
-echo "" > "$LIST_FILE"
-echo "--- Tracker Vertical Fix Started: $(date) ---" > tracker_debug.log
+rm -f "payload.json"
+> "$LIST_FILE" 
+
+echo "--- Tracker Reset & Started: $(date) ---" > tracker_debug.log
 
 # Map Name Translation
 if [ "$SERVER_MAP" == "Level01_Main" ]; then
@@ -26,18 +30,25 @@ else
 fi
 
 # --- Background Listener ---
-tail -F -n 100 "$LOG_FILE" 2>/dev/null | while read -r line; do
+# We use -n 0 so we only listen for NEW joins starting NOW
+tail -F -n 0 "$LOG_FILE" 2>/dev/null | while read -r line; do
+    
+    # Capture Joins
     if [[ "$line" == *"Join succeeded:"* ]]; then
         NAME=$(echo "$line" | sed 's/.*Join succeeded: //' | tr -d '\r\n"' | tr -d "'" | xargs)
         if [ -n "$NAME" ] && ! grep -q "^$NAME$" "$LIST_FILE"; then
             echo "$NAME" >> "$LIST_FILE"
+            echo "[EVENT] $NAME joined" >> tracker_debug.log
         fi
     fi
 
-    if [[ "$line" == *"logged out"* ]] || [[ "$line" == *"ClosePort"* ]]; then
+    # Broad Leave Detection (Catches almost any disconnect)
+    if [[ "$line" == *"logged out"* ]] || [[ "$line" == *"ClosePort"* ]] || [[ "$line" == *"CleanupSession"* ]] || [[ "$line" == *"DestroyPlayer"* ]]; then
+        # Check if any name in our list appears in this log line
         while read -r p_name; do
             if [ -n "$p_name" ] && [[ "$line" == *"$p_name"* ]]; then
                 sed -i "/^$p_name$/d" "$LIST_FILE"
+                echo "[EVENT] $p_name left" >> tracker_debug.log
             fi
         done < "$LIST_FILE"
     fi
@@ -45,23 +56,21 @@ done &
 
 # --- Main Discord Loop ---
 while true; do
-    # 1. Clean Player Count (Ensures it's a single digit, no '00')
+    # Count real lines only
     PLAYERS=$(grep -c "[^[:space:]]" "$LIST_FILE" || echo "0")
-    PLAYERS=$(echo "$PLAYERS" | tr -d ' ')
-
-    # 2. VERTICAL LIST LOGIC
-    # This takes the names and replaces the spaces between them with a JSON-friendly \n
+    
+    # Format Vertical List for JSON
     if [ "$PLAYERS" -eq "0" ]; then
         FINAL_LIST="None online"
     else
-        # This joins the lines with a literal \n for the JSON payload
+        # Joins names with a literal \n for Discord to read vertically
         FINAL_LIST=$(sed '/^$/d' "$LIST_FILE" | tr -d '"' | paste -sd ',' - | sed 's/,/\\n/g')
     fi
     
     CUR_TIME=$(date +'%T')
     CLEAN_SNAME=$(echo "${SERVER_NAME:-Soulmask Server}" | tr -d '"' | tr -dc '[:print:]')
 
-    # 3. Build Payload (Now with escaped newlines)
+    # Build Payload
     cat <<EOF > payload.json
 {
   "username": "$BOT_NAME",
@@ -81,7 +90,6 @@ while true; do
 }
 EOF
 
-    # 4. Send/Update Logic
     if [ ! -s "$MSG_ID_FILE" ]; then
         RESPONSE=$(curl -s -X POST -H "Content-Type: application/json" -d @payload.json "${DISCORD_WEBHOOK}?wait=true")
         NEW_ID=$(echo "$RESPONSE" | grep -o '"id":"[0-9]*"' | head -n 1 | cut -d'"' -f4)
@@ -92,7 +100,7 @@ EOF
         MESSAGE_ID=$(cat "$MSG_ID_FILE")
         HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X PATCH -H "Content-Type: application/json" -d @payload.json "${DISCORD_WEBHOOK}/messages/${MESSAGE_ID}")
         if [ "$HTTP_CODE" != "200" ] && [ "$HTTP_CODE" != "204" ]; then
-            rm -f "$MSG_ID_FILE"
+            rm -f "$MSG_ID_FILE" # If message was deleted, restart with a new one
         fi
     fi
 
