@@ -8,18 +8,18 @@ MAP_FILE="steam_id_map.tmp"
 
 # --- BRANDING ---
 BOT_NAME="${BOT_NAME:-Skye Serve Monitor}"
-BOT_LOGO="${BOT_LOGO:-https://raw.githubusercontent.com/parkervcp/pterodactyl-images/master/logos/soulmask.png}"
+BOT_LOGO="https://raw.githubusercontent.com/skye-serve/Soulmask-Egg-Configs/refs/heads/main/78691e4f-a6fd-4d12-ae6d-218f3a9c705c.jpg"
 
 # Kill ghost processes
 pkill -f tracker.sh
 
-# 1. TOTAL RESET: Wipe everything for a fresh start
+# 1. TOTAL RESET
 rm -f "$MSG_ID_FILE"
 rm -f "payload.json"
 > "$LIST_FILE"
 > "$MAP_FILE" 
 
-echo "--- SteamID Tracker Sync Started: $(date) ---" > tracker_debug.log
+echo "--- Sync Started: $(date) ---" > tracker_debug.log
 
 # Map Name Translation
 if [ "$SERVER_MAP" == "Level01_Main" ]; then
@@ -31,42 +31,42 @@ else
 fi
 
 # --- Background Listener ---
-tail -F -n 0 "$LOG_FILE" 2>/dev/null | while read -r line; do
+tail -F -n 2000 "$LOG_FILE" 2>/dev/null | while read -r line; do
     
-    # A. Link SteamID and Name during login handshake
-    if [[ "$line" == *"Login request:"* ]] && [[ "$line" == *"Name="* ]]; then
-        T_NAME=$(echo "$line" | sed 's/.*Name=\([^?& ]*\).*/\1/' | tr -d '"' | tr -d "'")
-        T_ID=$(echo "$line" | sed 's/.*userId=\([0-9]*\).*/\1/' | grep -E '^[0-9]+$')
+    # A. Capture SteamID mapping (Improved regex for Soulmask)
+    if [[ "$line" == *"Login request:"* ]]; then
+        # Extracts Name= and userId= from the login URL line
+        T_NAME=$(echo "$line" | sed -n 's/.*Name=\([^?& ]*\).*/\1/p' | tr -d '"' | tr -d "'")
+        T_ID=$(echo "$line" | grep -oE 'userId=[0-9]+' | cut -d'=' -f2)
         
         if [ -n "$T_NAME" ] && [ -n "$T_ID" ]; then
-            # Save the ID:Name relationship
-            echo "$T_ID:$T_NAME" >> "$MAP_FILE"
-            echo "[SYNC] Linked $T_NAME to $T_ID" >> tracker_debug.log
+            if ! grep -q "^$T_ID:" "$MAP_FILE"; then
+                echo "$T_ID:$T_NAME" >> "$MAP_FILE"
+                echo "[MAP] Linked $T_NAME to $T_ID" >> tracker_debug.log
+            fi
         fi
     fi
 
-    # B. Confirm Join & Add to List
+    # B. Add to Online List
     if [[ "$line" == *"Join succeeded:"* ]]; then
         NAME=$(echo "$line" | sed 's/.*Join succeeded: //' | tr -dc '[:print:]' | tr -d '"' | tr -d "'" | xargs)
         if [ -n "$NAME" ] && ! grep -qx "$NAME" "$LIST_FILE"; then
             echo "$NAME" >> "$LIST_FILE"
-            echo "[JOIN] $NAME added to online list" >> tracker_debug.log
+            echo "[JOIN] $NAME joined" >> tracker_debug.log
         fi
     fi
 
-    # C. Handle the Disconnect (Using the line you provided!)
+    # C. Handle Disconnect (Using your exact log line format)
     if [[ "$line" == *"player leave world."* ]]; then
-        LEAVE_ID=$(echo "$line" | awk -F'world. ' '{print $2}' | tr -dc '0-9')
-        
+        LEAVE_ID=$(echo "$line" | grep -oE '[0-9]{17}')
         if [ -n "$LEAVE_ID" ]; then
-            # Look up the Name associated with this SteamID
+            # Look up name in map
             P_NAME=$(grep "^$LEAVE_ID:" "$MAP_FILE" | cut -d':' -f2 | tail -n 1)
-            
             if [ -n "$P_NAME" ]; then
                 grep -vx "$P_NAME" "$LIST_FILE" > "${LIST_FILE}.new" && mv "${LIST_FILE}.new" "$LIST_FILE"
-                echo "[LEAVE] Removed $P_NAME (ID: $LEAVE_ID) from list" >> tracker_debug.log
+                echo "[LEAVE] Removed $P_NAME ($LEAVE_ID)" >> tracker_debug.log
             else
-                echo "[DEBUG] ID $LEAVE_ID left, but no name was mapped." >> tracker_debug.log
+                echo "[WARN] $LEAVE_ID left, but mapping failed." >> tracker_debug.log
             fi
         fi
     fi
@@ -74,11 +74,15 @@ done &
 
 # --- Main Discord Loop ---
 while true; do
-    PLAYERS=$(grep -c "[^[:space:]]" "$LIST_FILE" || echo "0")
-    
-    if [ "$PLAYERS" -eq "0" ]; then
+    # 1. Clean Player Count (Fixed the 'integer expression' error)
+    PLAYERS=$(grep -c "[^[:space:]]" "$LIST_FILE" | head -n 1)
+    if [ -z "$PLAYERS" ] || [ "$PLAYERS" -lt 0 ]; then PLAYERS=0; fi
+
+    # 2. Format Vertical List
+    if [ "$PLAYERS" -eq 0 ]; then
         FINAL_LIST="None online"
     else
+        # Creates a proper vertical list for Discord JSON
         FINAL_LIST=$(sed '/^$/d' "$LIST_FILE" | tr -d '"' | paste -sd ',' - | sed 's/,/\\n/g')
     fi
     
@@ -107,15 +111,11 @@ EOF
     if [ ! -s "$MSG_ID_FILE" ]; then
         RESPONSE=$(curl -s -X POST -H "Content-Type: application/json" -d @payload.json "${DISCORD_WEBHOOK}?wait=true")
         NEW_ID=$(echo "$RESPONSE" | grep -o '"id":"[0-9]*"' | head -n 1 | cut -d'"' -f4)
-        if [[ "$NEW_ID" =~ ^[0-9]+$ ]]; then
-            echo "$NEW_ID" > "$MSG_ID_FILE"
-        fi
+        if [[ "$NEW_ID" =~ ^[0-9]+$ ]]; then echo "$NEW_ID" > "$MSG_ID_FILE"; fi
     else
         MESSAGE_ID=$(cat "$MSG_ID_FILE")
         HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X PATCH -H "Content-Type: application/json" -d @payload.json "${DISCORD_WEBHOOK}/messages/${MESSAGE_ID}")
-        if [ "$HTTP_CODE" != "200" ] && [ "$HTTP_CODE" != "204" ]; then
-            rm -f "$MSG_ID_FILE"
-        fi
+        if [ "$HTTP_CODE" != "200" ] && [ "$HTTP_CODE" != "204" ]; then rm -f "$MSG_ID_FILE"; fi
     fi
 
     sleep 10
