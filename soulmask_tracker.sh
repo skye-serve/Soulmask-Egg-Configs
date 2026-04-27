@@ -8,18 +8,25 @@ MAP_FILE="steam_id_map.tmp"
 
 # --- BRANDING ---
 BOT_NAME="${BOT_NAME:-Skye Serve Monitor}"
-BOT_LOGO="https://raw.githubusercontent.com/skye-serve/Soulmask-Egg-Configs/refs/heads/main/78691e4f-a6fd-4d12-ae6d-218f3a9c705c.jpg"
+BOT_LOGO="${BOT_LOGO:-https://raw.githubusercontent.com/parkervcp/pterodactyl-images/master/logos/soulmask.png}"
 
 # Kill ghost processes
 pkill -f tracker.sh
 
-# 1. TOTAL RESET
+# 1. CLEAN RESET
 rm -f "$MSG_ID_FILE"
 rm -f "payload.json"
-> "$LIST_FILE"
-> "$MAP_FILE" 
+> "$LIST_FILE" 
+# Note: We do NOT wipe the MAP_FILE here so it remembers IDs across restarts
+touch "$MAP_FILE"
 
-echo "--- Sync Started: $(date) ---" > tracker_debug.log
+echo "--- Logic Reset Started: $(date) ---" > tracker_debug.log
+
+# 2. PRE-SCAN: Learn IDs from history before we start listening for Joins
+echo "[INIT] Scanning log history for ID mappings..." >> tracker_debug.log
+grep "Login request:" "$LOG_FILE" | sed -n 's/.*Name=\([^?& ]*\).*userId=\([0-9]*\).*/\2:\1/p' >> "$MAP_FILE"
+# Clean up duplicates in the map
+sort -u "$MAP_FILE" -o "$MAP_FILE"
 
 # Map Name Translation
 if [ "$SERVER_MAP" == "Level01_Main" ]; then
@@ -31,23 +38,21 @@ else
 fi
 
 # --- Background Listener ---
-tail -F -n 2000 "$LOG_FILE" 2>/dev/null | while read -r line; do
+# We use -n 0 to ignore all history for Joins/Leaves. We only care about what happens NOW.
+tail -F -n 0 "$LOG_FILE" 2>/dev/null | while read -r line; do
     
-    # A. Capture SteamID mapping (Improved regex for Soulmask)
+    # A. Capture NEW SteamID mapping
     if [[ "$line" == *"Login request:"* ]]; then
-        # Extracts Name= and userId= from the login URL line
         T_NAME=$(echo "$line" | sed -n 's/.*Name=\([^?& ]*\).*/\1/p' | tr -d '"' | tr -d "'")
         T_ID=$(echo "$line" | grep -oE 'userId=[0-9]+' | cut -d'=' -f2)
-        
         if [ -n "$T_NAME" ] && [ -n "$T_ID" ]; then
             if ! grep -q "^$T_ID:" "$MAP_FILE"; then
                 echo "$T_ID:$T_NAME" >> "$MAP_FILE"
-                echo "[MAP] Linked $T_NAME to $T_ID" >> tracker_debug.log
             fi
         fi
     fi
 
-    # B. Add to Online List
+    # B. Add to Online List (Only for NEW events)
     if [[ "$line" == *"Join succeeded:"* ]]; then
         NAME=$(echo "$line" | sed 's/.*Join succeeded: //' | tr -dc '[:print:]' | tr -d '"' | tr -d "'" | xargs)
         if [ -n "$NAME" ] && ! grep -qx "$NAME" "$LIST_FILE"; then
@@ -56,17 +61,14 @@ tail -F -n 2000 "$LOG_FILE" 2>/dev/null | while read -r line; do
         fi
     fi
 
-    # C. Handle Disconnect (Using your exact log line format)
+    # C. Handle Disconnect
     if [[ "$line" == *"player leave world."* ]]; then
         LEAVE_ID=$(echo "$line" | grep -oE '[0-9]{17}')
         if [ -n "$LEAVE_ID" ]; then
-            # Look up name in map
             P_NAME=$(grep "^$LEAVE_ID:" "$MAP_FILE" | cut -d':' -f2 | tail -n 1)
             if [ -n "$P_NAME" ]; then
                 grep -vx "$P_NAME" "$LIST_FILE" > "${LIST_FILE}.new" && mv "${LIST_FILE}.new" "$LIST_FILE"
-                echo "[LEAVE] Removed $P_NAME ($LEAVE_ID)" >> tracker_debug.log
-            else
-                echo "[WARN] $LEAVE_ID left, but mapping failed." >> tracker_debug.log
+                echo "[LEAVE] Removed $P_NAME" >> tracker_debug.log
             fi
         fi
     fi
@@ -74,15 +76,13 @@ done &
 
 # --- Main Discord Loop ---
 while true; do
-    # 1. Clean Player Count (Fixed the 'integer expression' error)
-    PLAYERS=$(grep -c "[^[:space:]]" "$LIST_FILE" | head -n 1)
-    if [ -z "$PLAYERS" ] || [ "$PLAYERS" -lt 0 ]; then PLAYERS=0; fi
+    # Bulletproof player count
+    PLAYERS=$(grep -c "[^[:space:]]" "$LIST_FILE")
+    [ -z "$PLAYERS" ] && PLAYERS=0
 
-    # 2. Format Vertical List
     if [ "$PLAYERS" -eq 0 ]; then
         FINAL_LIST="None online"
     else
-        # Creates a proper vertical list for Discord JSON
         FINAL_LIST=$(sed '/^$/d' "$LIST_FILE" | tr -d '"' | paste -sd ',' - | sed 's/,/\\n/g')
     fi
     
@@ -115,7 +115,7 @@ EOF
     else
         MESSAGE_ID=$(cat "$MSG_ID_FILE")
         HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X PATCH -H "Content-Type: application/json" -d @payload.json "${DISCORD_WEBHOOK}/messages/${MESSAGE_ID}")
-        if [ "$HTTP_CODE" != "200" ] && [ "$HTTP_CODE" != "204" ]; then rm -f "$MSG_ID_FILE"; fi
+        [ "$HTTP_CODE" != "200" ] && [ "$HTTP_CODE" != "204" ] && rm -f "$MSG_ID_FILE"
     fi
 
     sleep 10
