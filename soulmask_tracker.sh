@@ -5,15 +5,16 @@ LOG_FILE="WS/Saved/Logs/WS.log"
 MSG_ID_FILE="discord_message_id.txt"
 LIST_FILE="current_players.tmp"
 
-# --- BRANDING (Change these!) ---
+# --- BRANDING ---
+# Change these to your own logo and name!
 BOT_NAME="Skye Serve Soulmask Monitor"
-BOT_LOGO="https://raw.githubusercontent.com/skye-serve/Soulmask-Egg-Configs/refs/heads/main/78691e4f-a6fd-4d12-ae6d-218f3a9c705c.jpg" # Put a direct link to your logo here
+BOT_LOGO="https://raw.githubusercontent.com/skye-serve/Soulmask-Egg-Configs/refs/heads/main/78691e4f-a6fd-4d12-ae6d-218f3a9c705c.jpg"
 
-# Kill old versions
+# Kill any existing tracker processes
 pkill -f tracker.sh
 rm -f "$MSG_ID_FILE"
 echo "" > "$LIST_FILE"
-echo "--- Pro Tracker Started: $(date) ---" > tracker_debug.log
+echo "--- Tracker Vertical Fix Started: $(date) ---" > tracker_debug.log
 
 # Map Name Translation
 if [ "$SERVER_MAP" == "Level01_Main" ]; then
@@ -25,31 +26,43 @@ else
 fi
 
 # --- Background Listener ---
-tail -F -n 0 "$LOG_FILE" 2>/dev/null | while read -r line; do
+tail -F -n 100 "$LOG_FILE" 2>/dev/null | while read -r line; do
     if [[ "$line" == *"Join succeeded:"* ]]; then
-        NAME=$(echo "$line" | sed 's/.*Join succeeded: //' | tr -dc '[:print:]' | tr -d '"' | tr -d "'")
-        if ! grep -q "^$NAME$" "$LIST_FILE"; then
+        NAME=$(echo "$line" | sed 's/.*Join succeeded: //' | tr -d '\r\n"' | tr -d "'" | xargs)
+        if [ -n "$NAME" ] && ! grep -q "^$NAME$" "$LIST_FILE"; then
             echo "$NAME" >> "$LIST_FILE"
         fi
     fi
+
     if [[ "$line" == *"logged out"* ]] || [[ "$line" == *"ClosePort"* ]]; then
         while read -r p_name; do
-            if [[ "$line" == *"$p_name"* ]]; then
+            if [ -n "$p_name" ] && [[ "$line" == *"$p_name"* ]]; then
                 sed -i "/^$p_name$/d" "$LIST_FILE"
             fi
         done < "$LIST_FILE"
     fi
 done &
 
-# --- Safe JSON Builder ---
-build_json() {
-    local s_name="$1"
-    local map="$2"
-    local count="$3"
-    local list="$4"
-    local time="$5"
+# --- Main Discord Loop ---
+while true; do
+    # 1. Clean Player Count (Ensures it's a single digit, no '00')
+    PLAYERS=$(grep -c "[^[:space:]]" "$LIST_FILE" || echo "0")
+    PLAYERS=$(echo "$PLAYERS" | tr -d ' ')
 
-    cat <<EOF
+    # 2. VERTICAL LIST LOGIC
+    # This takes the names and replaces the spaces between them with a JSON-friendly \n
+    if [ "$PLAYERS" -eq "0" ]; then
+        FINAL_LIST="None online"
+    else
+        # This joins the lines with a literal \n for the JSON payload
+        FINAL_LIST=$(sed '/^$/d' "$LIST_FILE" | tr -d '"' | paste -sd ',' - | sed 's/,/\\n/g')
+    fi
+    
+    CUR_TIME=$(date +'%T')
+    CLEAN_SNAME=$(echo "${SERVER_NAME:-Soulmask Server}" | tr -d '"' | tr -dc '[:print:]')
+
+    # 3. Build Payload (Now with escaped newlines)
+    cat <<EOF > payload.json
 {
   "username": "$BOT_NAME",
   "avatar_url": "$BOT_LOGO",
@@ -57,42 +70,23 @@ build_json() {
     "title": "🎮 Soulmask Live Server Status",
     "color": 5763719,
     "fields": [
-      {"name": "Server Name", "value": "$s_name", "inline": false},
+      {"name": "Server Name", "value": "$CLEAN_SNAME", "inline": false},
       {"name": "Status", "value": "🟢 Online", "inline": true},
-      {"name": "Map", "value": "$map", "inline": true},
-      {"name": "Current Players", "value": "$count", "inline": true},
-      {"name": "Online Players", "value": "\`\`\`\n$list\n\`\`\`", "inline": false}
+      {"name": "Map", "value": "$DISPLAY_MAP", "inline": true},
+      {"name": "Current Players", "value": "$PLAYERS", "inline": true},
+      {"name": "Online Players", "value": "\`\`\`\\n$FINAL_LIST\\n\`\`\`", "inline": false}
     ],
-    "footer": {"text": "Last Updated: $time | Skye Serve"}
+    "footer": {"text": "Last Updated: $CUR_TIME | Skye Serve"}
   }]
 }
 EOF
-}
 
-# --- Main Update Loop ---
-while true; do
-    CLEAN_SNAME=$(echo "${SERVER_NAME:-Soulmask Server}" | tr -d '"' | tr -dc '[:print:]')
-    CLEAN_MAP=$(echo "$DISPLAY_MAP" | tr -d '"')
-    
-    PLAYERS=$(grep -c "[^[:space:]]" "$LIST_FILE" || echo "0")
-    
-    # VERTICAL LIST: Using a newline instead of a comma
-    # We use 'cat' to get the lines and 'sed' to ensure it's clean
-    CLEAN_LIST=$(cat "$LIST_FILE" | tr -d '"' | tr -dc '[:print:]\n' | sed '/^$/d')
-    [ -z "$CLEAN_LIST" ] && CLEAN_LIST="None online"
-    
-    CUR_TIME=$(date +'%T')
-
-    build_json "$CLEAN_SNAME" "$CLEAN_MAP" "$PLAYERS" "$CLEAN_LIST" "$CUR_TIME" > payload.json
-
+    # 4. Send/Update Logic
     if [ ! -s "$MSG_ID_FILE" ]; then
         RESPONSE=$(curl -s -X POST -H "Content-Type: application/json" -d @payload.json "${DISCORD_WEBHOOK}?wait=true")
         NEW_ID=$(echo "$RESPONSE" | grep -o '"id":"[0-9]*"' | head -n 1 | cut -d'"' -f4)
         if [[ "$NEW_ID" =~ ^[0-9]+$ ]]; then
             echo "$NEW_ID" > "$MSG_ID_FILE"
-            echo "[SUCCESS] Created Message: $NEW_ID" >> tracker_debug.log
-        else
-            echo "[ERROR] ID Capture Failed" >> tracker_debug.log
         fi
     else
         MESSAGE_ID=$(cat "$MSG_ID_FILE")
@@ -101,5 +95,6 @@ while true; do
             rm -f "$MSG_ID_FILE"
         fi
     fi
+
     sleep 10
 done
