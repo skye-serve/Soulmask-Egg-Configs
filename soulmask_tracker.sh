@@ -1,16 +1,19 @@
 #!/bin/bash
 
+# --- CONFIGURATION ---
 LOG_FILE="WS/Saved/Logs/WS.log"
 MSG_ID_FILE="discord_message_id.txt"
 LIST_FILE="current_players.tmp"
 
+# --- BRANDING (Change these!) ---
+BOT_NAME="Skye Serve Soulmask Monitor"
+BOT_LOGO="https://i.imgur.com/your-logo-url.png" # Put a direct link to your logo here
+
 # Kill old versions
 pkill -f tracker.sh
-
-# Fresh start
 rm -f "$MSG_ID_FILE"
 echo "" > "$LIST_FILE"
-echo "--- Pro Tracker Final Fix: $(date) ---" > tracker_debug.log
+echo "--- Pro Tracker Started: $(date) ---" > tracker_debug.log
 
 # Map Name Translation
 if [ "$SERVER_MAP" == "Level01_Main" ]; then
@@ -48,6 +51,8 @@ build_json() {
 
     cat <<EOF
 {
+  "username": "$BOT_NAME",
+  "avatar_url": "$BOT_LOGO",
   "embeds": [{
     "title": "🎮 Soulmask Live Server Status",
     "color": 5763719,
@@ -56,7 +61,7 @@ build_json() {
       {"name": "Status", "value": "🟢 Online", "inline": true},
       {"name": "Map", "value": "$map", "inline": true},
       {"name": "Current Players", "value": "$count", "inline": true},
-      {"name": "Online Players", "value": "\`\`\`$list\`\`\`", "inline": false}
+      {"name": "Online Players", "value": "\`\`\`\n$list\n\`\`\`", "inline": false}
     ],
     "footer": {"text": "Last Updated: $time | Skye Serve"}
   }]
@@ -69,41 +74,32 @@ while true; do
     CLEAN_SNAME=$(echo "${SERVER_NAME:-Soulmask Server}" | tr -d '"' | tr -dc '[:print:]')
     CLEAN_MAP=$(echo "$DISPLAY_MAP" | tr -d '"')
     
-    # Improved Player Count
-    PLAYERS=$(grep -c "[^[:space:]]" "$LIST_FILE")
-    if [ -z "$PLAYERS" ]; then PLAYERS="0"; fi
-
-    CLEAN_LIST=$(paste -sd ", " "$LIST_FILE" | tr -d '"' | tr -dc '[:print:]' | sed 's/^, //')
+    PLAYERS=$(grep -c "[^[:space:]]" "$LIST_FILE" || echo "0")
+    
+    # VERTICAL LIST: Using a newline instead of a comma
+    # We use 'cat' to get the lines and 'sed' to ensure it's clean
+    CLEAN_LIST=$(cat "$LIST_FILE" | tr -d '"' | tr -dc '[:print:]\n' | sed '/^$/d')
     [ -z "$CLEAN_LIST" ] && CLEAN_LIST="None online"
+    
     CUR_TIME=$(date +'%T')
 
     build_json "$CLEAN_SNAME" "$CLEAN_MAP" "$PLAYERS" "$CLEAN_LIST" "$CUR_TIME" > payload.json
 
     if [ ! -s "$MSG_ID_FILE" ]; then
-        # INITIAL SEND
         RESPONSE=$(curl -s -X POST -H "Content-Type: application/json" -d @payload.json "${DISCORD_WEBHOOK}?wait=true")
-        
-        # NEW ID EXTRACTION: Much more robust
         NEW_ID=$(echo "$RESPONSE" | grep -o '"id":"[0-9]*"' | head -n 1 | cut -d'"' -f4)
-        
         if [[ "$NEW_ID" =~ ^[0-9]+$ ]]; then
             echo "$NEW_ID" > "$MSG_ID_FILE"
             echo "[SUCCESS] Created Message: $NEW_ID" >> tracker_debug.log
         else
-            echo "[ERROR] Failed to capture ID. Discord said: $RESPONSE" >> tracker_debug.log
+            echo "[ERROR] ID Capture Failed" >> tracker_debug.log
         fi
     else
-        # EDIT EXISTING
         MESSAGE_ID=$(cat "$MSG_ID_FILE")
         HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X PATCH -H "Content-Type: application/json" -d @payload.json "${DISCORD_WEBHOOK}/messages/${MESSAGE_ID}")
-        
         if [ "$HTTP_CODE" != "200" ] && [ "$HTTP_CODE" != "204" ]; then
-            echo "[RETRY] Edit failed (HTTP $HTTP_CODE). Clearing ID..." >> tracker_debug.log
             rm -f "$MSG_ID_FILE"
-        else
-            echo "[OK] Updated $CUR_TIME" >> tracker_debug.log
         fi
     fi
-
     sleep 10
 done
