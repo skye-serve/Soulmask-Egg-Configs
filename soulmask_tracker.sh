@@ -1,6 +1,5 @@
 #!/bin/bash
 
-# Create a debug log so we can see what the script is doing
 echo "Tracker Started..." > tracker_debug.log
 
 if [ -z "$DISCORD_WEBHOOK" ]; then
@@ -12,12 +11,10 @@ echo "Webhook found! Waiting for log folder..." >> tracker_debug.log
 
 LOG_DIR="WS/Saved/Logs"
 
-# Wait for the logs folder to be generated
 while [ ! -d "$LOG_DIR" ]; do
     sleep 5
 done
 
-# Find the most recently modified .log file automatically
 LOG_FILE=$(ls -t $LOG_DIR/*.log 2>/dev/null | head -n 1)
 
 while [ -z "$LOG_FILE" ]; do
@@ -30,17 +27,17 @@ echo "Success! Tailing log file: $LOG_FILE" >> tracker_debug.log
 MAP_NAME="${SERVER_MAP:-Unknown Map}"
 SERVER_ID="${CROSS_ID:-1}"
 
-# Tail the log file and read it line by line
 tail -F -n 0 "$LOG_FILE" | {
     players_online=0
     while read -r line; do
         
         # --- PLAYER JOINED ---
         if [[ "$line" == *"Join succeeded:"* ]]; then
-            PLAYER_NAME=$(echo "$line" | awk -F 'Join succeeded:' '{print $2}' | awk '{print $1}')
+            # Extract player name AND strip out hidden newlines/quotes
+            PLAYER_NAME=$(echo "$line" | awk -F 'Join succeeded:' '{print $2}' | awk '{print $1}' | tr -d '\r\n"\'')
             players_online=$((players_online + 1))
             
-            echo "DETECTED JOIN: $PLAYER_NAME. Firing Webhook..." >> tracker_debug.log
+            echo "DETECTED JOIN: ${PLAYER_NAME}. Firing Webhook..." >> tracker_debug.log
             
             JSON_PAYLOAD=$(cat <<EOF
 {
@@ -58,7 +55,6 @@ tail -F -n 0 "$LOG_FILE" | {
 }
 EOF
 )
-            # Send webhook and log the result
             curl -s -H "Content-Type: application/json" -X POST -d "$JSON_PAYLOAD" "$DISCORD_WEBHOOK" >> tracker_debug.log 2>&1
         fi
     done
