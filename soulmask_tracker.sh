@@ -7,8 +7,8 @@ LIST_FILE="current_players.tmp"
 MAP_FILE="steam_id_map.tmp"
 
 # --- BRANDING ---
-BOT_NAME="${BOT_NAME:-Skye Serve Monitor}"
-BOT_LOGO="${BOT_LOGO:-https://raw.githubusercontent.com/parkervcp/pterodactyl-images/master/logos/soulmask.png}"
+BOT_NAME="Skye Serve Soulmask Monitor"
+BOT_LOGO="https://raw.githubusercontent.com/skye-serve/Soulmask-Egg-Configs/refs/heads/main/78691e4f-a6fd-4d12-ae6d-218f3a9c705c.jpg"
 
 # Kill ghost processes
 pkill -f tracker.sh
@@ -17,16 +17,32 @@ pkill -f tracker.sh
 rm -f "$MSG_ID_FILE"
 rm -f "payload.json"
 > "$LIST_FILE" 
-# Note: We do NOT wipe the MAP_FILE here so it remembers IDs across restarts
 touch "$MAP_FILE"
 
-echo "--- Logic Reset Started: $(date) ---" > tracker_debug.log
+echo "--- Soulmask Final Sync Started: $(date) ---" > tracker_debug.log
 
-# 2. PRE-SCAN: Learn IDs from history before we start listening for Joins
-echo "[INIT] Scanning log history for ID mappings..." >> tracker_debug.log
-grep "Login request:" "$LOG_FILE" | sed -n 's/.*Name=\([^?& ]*\).*userId=\([0-9]*\).*/\2:\1/p' >> "$MAP_FILE"
-# Clean up duplicates in the map
-sort -u "$MAP_FILE" -o "$MAP_FILE"
+# 2. THE NEW MAPPING LOGIC
+# This specifically looks for the 'player ready' line you found
+update_mapping() {
+    local raw_line="$1"
+    if [[ "$raw_line" == *"player ready."* ]]; then
+        # Extract SteamID (Netuid)
+        local t_id=$(echo "$raw_line" | sed -n 's/.*Netuid:\([0-9]*\).*/\1/p')
+        # Extract Name
+        local t_name=$(echo "$raw_line" | sed -n 's/.*Name:\(.*\)/\1/p' | xargs)
+        
+        if [ -n "$t_name" ] && [ -n "$t_id" ]; then
+            # We overwrite any old mapping for this ID to ensure it's current
+            grep -vx "^$t_id:.*" "$MAP_FILE" > "${MAP_FILE}.new" 2>/dev/null
+            mv "${MAP_FILE}.new" "$MAP_FILE" 2>/dev/null
+            echo "$t_id:$t_name" >> "$MAP_FILE"
+            echo "[MAP] Linked $t_name to $t_id" >> tracker_debug.log
+        fi
+    fi
+}
+
+# 3. PRE-SCAN: Scan history to learn who everyone is
+while read -r line; do update_mapping "$line"; done < "$LOG_FILE"
 
 # Map Name Translation
 if [ "$SERVER_MAP" == "Level01_Main" ]; then
@@ -38,37 +54,36 @@ else
 fi
 
 # --- Background Listener ---
-# We use -n 0 to ignore all history for Joins/Leaves. We only care about what happens NOW.
 tail -F -n 0 "$LOG_FILE" 2>/dev/null | while read -r line; do
     
-    # A. Capture NEW SteamID mapping
-    if [[ "$line" == *"Login request:"* ]]; then
-        T_NAME=$(echo "$line" | sed -n 's/.*Name=\([^?& ]*\).*/\1/p' | tr -d '"' | tr -d "'")
-        T_ID=$(echo "$line" | grep -oE 'userId=[0-9]+' | cut -d'=' -f2)
-        if [ -n "$T_NAME" ] && [ -n "$T_ID" ]; then
-            if ! grep -q "^$T_ID:" "$MAP_FILE"; then
-                echo "$T_ID:$T_NAME" >> "$MAP_FILE"
-            fi
-        fi
-    fi
+    # A. Mapping Event (Player Ready)
+    update_mapping "$line"
 
-    # B. Add to Online List (Only for NEW events)
+    # B. Join Event
     if [[ "$line" == *"Join succeeded:"* ]]; then
         NAME=$(echo "$line" | sed 's/.*Join succeeded: //' | tr -dc '[:print:]' | tr -d '"' | tr -d "'" | xargs)
         if [ -n "$NAME" ] && ! grep -qx "$NAME" "$LIST_FILE"; then
             echo "$NAME" >> "$LIST_FILE"
-            echo "[JOIN] $NAME joined" >> tracker_debug.log
+            echo "[JOIN] $NAME online" >> tracker_debug.log
         fi
     fi
 
-    # C. Handle Disconnect
+    # C. Leave Event (Using SteamID)
     if [[ "$line" == *"player leave world."* ]]; then
         LEAVE_ID=$(echo "$line" | grep -oE '[0-9]{17}')
         if [ -n "$LEAVE_ID" ]; then
             P_NAME=$(grep "^$LEAVE_ID:" "$MAP_FILE" | cut -d':' -f2 | tail -n 1)
+            
             if [ -n "$P_NAME" ]; then
                 grep -vx "$P_NAME" "$LIST_FILE" > "${LIST_FILE}.new" && mv "${LIST_FILE}.new" "$LIST_FILE"
-                echo "[LEAVE] Removed $P_NAME" >> tracker_debug.log
+                echo "[LEAVE] Removed $P_NAME ($LEAVE_ID)" >> tracker_debug.log
+            else
+                # FALLBACK: If only 1 person is on, clear them.
+                ONLINE_COUNT=$(grep -c "[^[:space:]]" "$LIST_FILE")
+                if [ "$ONLINE_COUNT" -le 1 ]; then
+                    > "$LIST_FILE"
+                    echo "[LEAVE] Mapping missing, cleared list anyway." >> tracker_debug.log
+                fi
             fi
         fi
     fi
@@ -76,8 +91,8 @@ done &
 
 # --- Main Discord Loop ---
 while true; do
-    # Bulletproof player count
-    PLAYERS=$(grep -c "[^[:space:]]" "$LIST_FILE")
+    # Get player count as a single clean number
+    PLAYERS=$(grep -c "[^[:space:]]" "$LIST_FILE" | awk '{print $1}')
     [ -z "$PLAYERS" ] && PLAYERS=0
 
     if [ "$PLAYERS" -eq 0 ]; then
