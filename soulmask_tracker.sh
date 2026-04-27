@@ -2,68 +2,79 @@
 
 # Configuration
 LOG_FILE="WS/Saved/Logs/WS.log"
-MAP_NAME="${SERVER_MAP:-Level01_Main}"
-NODE_ID="${CROSS_ID:-1}"
+MSG_ID_FILE="discord_message_id.txt"
+rm -f "$MSG_ID_FILE"
 
-# Initialize counters and temporary storage
+# Translate Map Name
+if [ "$SERVER_MAP" == "Level01_Main" ]; then
+    DISPLAY_MAP="The Main Map"
+elif [ "$SERVER_MAP" == "DLC_Level01_Main" ]; then
+    DISPLAY_MAP="Shifting Sands"
+else
+    DISPLAY_MAP="${SERVER_MAP:-Unknown}"
+fi
+
+# Initialize Variables
 players_online=0
-temp_steamid="Unknown"
-temp_ip="Unknown"
+player_list=""
 
-# Wait for log file
-while [ ! -f "$LOG_FILE" ]; do sleep 5; done
-echo "Monitoring for pro features: $LOG_FILE"
-
-# Process the log line-by-line
+# --- Background Listener for Logs ---
 tail -F -n 0 "$LOG_FILE" | while read -r line; do
-
-    # 1. Capture Steam ID (Appears during login request)
-    if [[ "$line" == *"Login request: "* ]]; then
-        temp_steamid=$(echo "$line" | grep -oP 'userId: \K[0-9]+' || echo "Unknown")
-    fi
-
-    # 2. Capture IP Address (Appears during connection)
-    if [[ "$line" == *"RemoteAddr: "* ]]; then
-        temp_ip=$(echo "$line" | grep -oP 'RemoteAddr: \K[0-9.]+' || echo "Unknown")
-    fi
-
-    # 3. Capture Join Success & Fire Webhook
+    
+    # Handle Joins
     if [[ "$line" == *"Join succeeded:"* ]]; then
-        PLAYER_NAME=$(echo "$line" | sed 's/.*Join succeeded: //' | tr -d '\r\n"' | tr -d "'")
-        players_online=$((players_online + 1))
+        NAME=$(echo "$line" | sed 's/.*Join succeeded: //' | tr -d '\r\n"' | tr -d "'")
+        # Add name only if not already in list
+        if [[ ! "$player_list" == *"$NAME"* ]]; then
+            players_online=$((players_online + 1))
+            if [ -z "$player_list" ]; then player_list="$NAME"; else player_list="$player_list, $NAME"; fi
+        fi
+    fi
 
-        # Build the exact JSON from your screenshot
-        JSON_PAYLOAD=$(cat <<EOF
+    # Handle Leaves (Smart Removal)
+    if [[ "$line" == *"logged out"* ]] || [[ "$line" == *"ClosePort"* ]]; then
+        # Try to extract name from the logout line if possible
+        L_NAME=$(echo "$line" | grep -oP 'player \K[^ ]+' || echo "")
+        
+        if [ $players_online -gt 0 ]; then
+            players_online=$((players_online - 1))
+            # Remove the name from the comma-separated list
+            player_list=$(echo "$player_list" | sed "s/$L_NAME//g; s/,,/,/g; s/^,//; s/,$//; s/ ,/ /g")
+        fi
+        if [ $players_online -le 0 ]; then players_online=0; player_list=""; fi
+    fi
+done &
+
+# --- Main Update Loop ---
+while true; do
+    # Display "None" if list is empty
+    FINAL_LIST="${player_list:-None online}"
+
+    JSON_PAYLOAD=$(cat <<EOF
 {
   "embeds": [{
-    "title": "🟢 Player Joined",
+    "title": "🎮 Soulmask Live Server Status",
     "color": 5763719,
     "fields": [
-      {"name": "Player Name", "value": "${PLAYER_NAME}", "inline": true},
-      {"name": "Steam ID", "value": "${temp_steamid}", "inline": true},
-      {"name": "IP Address", "value": "${temp_ip}", "inline": true},
-      {"name": "Total Players Online", "value": "${players_online}", "inline": false},
-      {"name": "Map", "value": "${MAP_NAME}", "inline": true},
-      {"name": "Server Node ID", "value": "${NODE_ID}", "inline": true}
+      {"name": "Server Name", "value": "${SERVER_NAME:-Soulmask Server}", "inline": false},
+      {"name": "Status", "value": "🟢 Online", "inline": true},
+      {"name": "Map", "value": "${DISPLAY_MAP}", "inline": true},
+      {"name": "Current Players", "value": "${players_online}", "inline": true},
+      {"name": "Online Players", "value": "\`\`\`${FINAL_LIST}\`\`\`", "inline": false}
     ],
-    "footer": {"text": "Powered by Skye Serve"}
+    "footer": {"text": "Last Updated: $(date +'%T') | Skye Serve"}
   }]
 }
 EOF
 )
-        # Send to Discord
-        curl -s -X POST -H "Content-Type: application/json" -d "$JSON_PAYLOAD" "$DISCORD_WEBHOOK"
-        
-        # Reset temps for the next player
-        temp_steamid="Unknown"
-        temp_ip="Unknown"
+
+    if [ ! -f "$MSG_ID_FILE" ]; then
+        RESPONSE=$(curl -s -X POST -H "Content-Type: application/json" -d "$JSON_PAYLOAD" "${DISCORD_WEBHOOK}?wait=true")
+        echo "$RESPONSE" | grep -oP '"id": "\K[0-9]+' > "$MSG_ID_FILE"
+    else
+        MESSAGE_ID=$(cat "$MSG_ID_FILE")
+        curl -s -X PATCH -H "Content-Type: application/json" -d "$JSON_PAYLOAD" "${DISCORD_WEBHOOK}/messages/${MESSAGE_ID}" > /dev/null
     fi
 
-    # 4. Handle Disconnects (To keep the player count accurate)
-    if [[ "$line" == *"ClosePort"* ]] || [[ "$line" == *"logged out"* ]]; then
-        if [ $players_online -gt 0 ]; then
-            players_online=$((players_online - 1))
-        fi
-    fi
-
+    sleep 10 
 done
