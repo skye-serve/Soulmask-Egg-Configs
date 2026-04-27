@@ -7,7 +7,7 @@ LIST_FILE="current_players.tmp"
 
 # --- BRANDING (Change these!) ---
 BOT_NAME="Skye Serve Soulmask Monitor"
-BOT_LOGO="https://i.imgur.com/your-logo-url.png" # Put a direct link to your logo here
+BOT_LOGO="https://raw.githubusercontent.com/skye-serve/Soulmask-Egg-Configs/refs/heads/main/78691e4f-a6fd-4d12-ae6d-218f3a9c705c.jpg" # Put a direct link to your logo here
 
 # Kill old versions
 pkill -f tracker.sh
