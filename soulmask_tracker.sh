@@ -68,7 +68,11 @@ EOF
 while true; do
     CLEAN_SNAME=$(echo "${SERVER_NAME:-Soulmask Server}" | tr -d '"' | tr -dc '[:print:]')
     CLEAN_MAP=$(echo "$DISPLAY_MAP" | tr -d '"')
-    PLAYERS=$(grep -c "[^[:space:]]" "$LIST_FILE" || echo "0")
+    
+    # Improved Player Count
+    PLAYERS=$(grep -c "[^[:space:]]" "$LIST_FILE")
+    if [ -z "$PLAYERS" ]; then PLAYERS="0"; fi
+
     CLEAN_LIST=$(paste -sd ", " "$LIST_FILE" | tr -d '"' | tr -dc '[:print:]' | sed 's/^, //')
     [ -z "$CLEAN_LIST" ] && CLEAN_LIST="None online"
     CUR_TIME=$(date +'%T')
@@ -79,22 +83,22 @@ while true; do
         # INITIAL SEND
         RESPONSE=$(curl -s -X POST -H "Content-Type: application/json" -d @payload.json "${DISCORD_WEBHOOK}?wait=true")
         
-        # FIXED: Removed the space after "id": to match Discord's actual response
-        NEW_ID=$(echo "$RESPONSE" | sed -n 's/.*"id":"\([0-9]*\)".*/\1/p')
+        # NEW ID EXTRACTION: Much more robust
+        NEW_ID=$(echo "$RESPONSE" | grep -o '"id":"[0-9]*"' | head -n 1 | cut -d'"' -f4)
         
         if [[ "$NEW_ID" =~ ^[0-9]+$ ]]; then
             echo "$NEW_ID" > "$MSG_ID_FILE"
             echo "[SUCCESS] Created Message: $NEW_ID" >> tracker_debug.log
         else
-            echo "[ERROR] Could not parse ID from: $RESPONSE" >> tracker_debug.log
+            echo "[ERROR] Failed to capture ID. Discord said: $RESPONSE" >> tracker_debug.log
         fi
     else
-        # EDIT
+        # EDIT EXISTING
         MESSAGE_ID=$(cat "$MSG_ID_FILE")
         HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X PATCH -H "Content-Type: application/json" -d @payload.json "${DISCORD_WEBHOOK}/messages/${MESSAGE_ID}")
         
         if [ "$HTTP_CODE" != "200" ] && [ "$HTTP_CODE" != "204" ]; then
-            echo "[RETRY] HTTP $HTTP_CODE - Resetting ID" >> tracker_debug.log
+            echo "[RETRY] Edit failed (HTTP $HTTP_CODE). Clearing ID..." >> tracker_debug.log
             rm -f "$MSG_ID_FILE"
         else
             echo "[OK] Updated $CUR_TIME" >> tracker_debug.log
