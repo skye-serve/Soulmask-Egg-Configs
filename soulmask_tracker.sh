@@ -12,7 +12,6 @@ BOT_NAME="${BOT_NAME:-Skye Serve Monitor}"
 BOT_LOGO="${BOT_LOGO:-https://raw.githubusercontent.com/parkervcp/pterodactyl-images/master/logos/soulmask.png}"
 
 # --- GHOST KILLER ---
-# Kills old duplicate background scripts so they don't turn Discord back to green!
 for pid in $(pgrep -f tracker.sh); do
     if [ "$pid" != "$$" ] && [ "$pid" != "$PPID" ]; then
         kill -9 "$pid" 2>/dev/null
@@ -56,8 +55,9 @@ fi
 # --- Background Listener ---
 tail -F -n 0 "$LOG_FILE" 2>/dev/null | while read -r line; do
     
-    if [[ "$line" == *"TRY RUN ADMIN COMMAND: shutdown"* ]] || [[ "$line" == *"LogExit: Exiting."* ]] || [[ "$line" == *"Exiting abnormally"* ]]; then
-        echo "[SHUTDOWN] Exit sequence detected!" >> tracker_debug.log
+    # Trigger #1: Catch the shutdown command to update Discord IMMEDIATELY
+    if [[ "$line" == *"TRY RUN ADMIN COMMAND: shutdown"* ]] || [[ "$line" == *"TRY RUN ADMIN COMMAND: Quit"* ]]; then
+        echo "[SHUTDOWN] Exit sequence detected! Flagging for Discord update..." >> tracker_debug.log
         touch "$FLAG_FILE"
         pkill -P $$ sleep 2>/dev/null
     fi
@@ -95,6 +95,7 @@ while true; do
     # === SHUTDOWN TRIGGER ===
     if [ -f "$FLAG_FILE" ]; then
         
+        # 1. Update Discord to RED immediately
         cat <<EOF > payload.json
 {
   "username": "$BOT_NAME",
@@ -118,10 +119,23 @@ EOF
             curl -s -o /dev/null -X PATCH -H "Content-Type: application/json" -d @payload.json "${DISCORD_WEBHOOK}/messages/${MESSAGE_ID}"
         fi
         
-        # Cleanly exit the script
-        pkill -P $$ 2>/dev/null
-        rm -f "$FLAG_FILE"
-        exit 0
+        # 2. PATIENTLY wait for the game to actually finish saving.
+        echo "Discord updated. Waiting for engine to finish saving..." >> tracker_debug.log
+        while true; do
+            # Check the bottom of the log file to see if Error 110 has popped up yet
+            if tail -n 50 "$LOG_FILE" 2>/dev/null | grep -qE "Exiting abnormally|Game engine shut down"; then
+                echo "Save complete! Executing surgical strike on frozen process..." >> tracker_debug.log
+                # Surgically snipe ONLY the frozen game process, leaving the container intact
+                pkill -9 -f "WSServer" 2>/dev/null
+                pkill -9 -f "Xvfb" 2>/dev/null
+                
+                # Now that the zombie is dead, we can cleanly exit the script
+                pkill -P $$ 2>/dev/null
+                rm -f "$FLAG_FILE"
+                exit 0
+            fi
+            sleep 2
+        done
     fi
     # === END SHUTDOWN TRIGGER ===
 
