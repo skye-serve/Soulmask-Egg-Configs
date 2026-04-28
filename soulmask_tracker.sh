@@ -115,16 +115,11 @@ EOF
             curl -s -o /dev/null -X PATCH -H "Content-Type: application/json" -d @payload.json "${DISCORD_WEBHOOK}/messages/${MESSAGE_ID}"
         fi
         
-        # 3. THE CLEANUP (The Zombie Killers)
-        # These commands execute the fake screen, the wrapper, and the log reader
-        # so the container drops the absolute second the engine finishes saving.
-        pkill -f "Xvfb" 2>/dev/null
-        pkill -f "wrapper.sh" 2>/dev/null
-        pkill -f "WSServer" 2>/dev/null
-        pkill -f "tail -F" 2>/dev/null
-        pkill -P $$ 2>/dev/null
+        # 3. THE CLEANUP (The Nuclear Option)
         rm -f "$FLAG_FILE"
-        exit 0
+        
+        # Snipe the container's master process to force an instant close
+        kill -9 1 2>/dev/null
     fi
     # === END OF SHUTDOWN TRIGGER ===
 
