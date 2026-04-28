@@ -11,9 +11,6 @@ FLAG_FILE="shutdown.flag"
 BOT_NAME="${BOT_NAME:-Skye Serve Monitor}"
 BOT_LOGO="${BOT_LOGO:-https://raw.githubusercontent.com/parkervcp/pterodactyl-images/master/logos/soulmask.png}"
 
-# Kill ghost processes
-pkill -f tracker.sh
-
 # 1. CLEAN RESET
 rm -f "$MSG_ID_FILE"
 rm -f "payload.json"
