@@ -5,6 +5,7 @@ LOG_FILE="WS/Saved/Logs/WS.log"
 MSG_ID_FILE="discord_message_id.txt"
 LIST_FILE="current_players.tmp"
 MAP_FILE="steam_id_map.tmp"
+FLAG_FILE="shutdown.flag"
 
 # --- BRANDING ---
 BOT_NAME="${BOT_NAME:-Skye Serve Monitor}"
@@ -16,31 +17,27 @@ pkill -f tracker.sh
 # 1. CLEAN RESET
 rm -f "$MSG_ID_FILE"
 rm -f "payload.json"
+rm -f "$FLAG_FILE"
 > "$LIST_FILE" 
 touch "$MAP_FILE"
 
-echo "--- Ghost Buster Sync Started: $(date) ---" > tracker_debug.log
+echo "--- System Started: $(date) ---" > tracker_debug.log
 
-# 2. MAPPING LOGIC (Now with strict carriage-return removal)
 update_mapping() {
     local raw_line="$1"
     if [[ "$raw_line" == *"player ready."* ]]; then
         local t_id=$(echo "$raw_line" | sed -n 's/.*Netuid:\([0-9]*\).*/\1/p' | tr -d '\r\n ')
-        
-        # The 'tr -d '\r\n'' is the magic bullet here. It strips hidden line breaks.
         local t_name=$(echo "$raw_line" | sed -n 's/.*Name:\(.*\)/\1/p' | tr -d '\r\n' | xargs)
         
         if [ -n "$t_name" ] && [ -n "$t_id" ]; then
             grep -vx "^$t_id:.*" "$MAP_FILE" > "${MAP_FILE}.new" 2>/dev/null
             mv "${MAP_FILE}.new" "$MAP_FILE" 2>/dev/null
             echo "$t_id:$t_name" >> "$MAP_FILE"
-            # Added quotes around the name in debug so we can visibly see if any spaces sneak in
-            echo "[MAP] Linked '$t_name' to '$t_id'" >> tracker_debug.log
         fi
     fi
 }
 
-# 3. PRE-SCAN
+# PRE-SCAN
 while read -r line; do update_mapping "$line"; done < "$LOG_FILE"
 
 if [ "$SERVER_MAP" == "Level01_Main" ]; then
@@ -54,44 +51,73 @@ fi
 # --- Background Listener ---
 tail -F -n 0 "$LOG_FILE" 2>/dev/null | while read -r line; do
     
+    # Shutdown Detection
+    if [[ "$line" == *"FUnixPlatformMisc::RequestExit"* ]]; then
+        echo "[SHUTDOWN] Server exit requested. Stopping tracker..." >> tracker_debug.log
+        touch "$FLAG_FILE"
+    fi
+
     update_mapping "$line"
 
     if [[ "$line" == *"Join succeeded:"* ]]; then
-        # Strict formatting for joining names too
         NAME=$(echo "$line" | sed 's/.*Join succeeded: //' | tr -d '\r\n' | tr -d '"' | tr -d "'" | xargs)
         if [ -n "$NAME" ] && ! grep -qx "$NAME" "$LIST_FILE"; then
             echo "$NAME" >> "$LIST_FILE"
-            echo "[JOIN] '$NAME' online" >> tracker_debug.log
         fi
     fi
 
     if [[ "$line" == *"player leave world."* ]]; then
         LEAVE_ID=$(echo "$line" | grep -oE '[0-9]{17}')
         if [ -n "$LEAVE_ID" ]; then
-            # Extract name and strip carriage returns one last time
             P_NAME=$(grep "^$LEAVE_ID:" "$MAP_FILE" | cut -d':' -f2 | tail -n 1 | tr -d '\r\n' | xargs)
-            
             if [ -n "$P_NAME" ]; then
                 grep -vx "$P_NAME" "$LIST_FILE" > "${LIST_FILE}.new" && mv "${LIST_FILE}.new" "$LIST_FILE"
-                echo "[LEAVE] Removed '$P_NAME' ($LEAVE_ID)" >> tracker_debug.log
-                
-                # EXTRA SAFEGUARD: If grep fails, we use sed to force delete them
-                if grep -qx "$P_NAME" "$LIST_FILE"; then
-                    sed -i "/$P_NAME/d" "$LIST_FILE"
-                fi
+                if grep -qx "$P_NAME" "$LIST_FILE"; then sed -i "/$P_NAME/d" "$LIST_FILE"; fi
             else
                 ONLINE_COUNT=$(grep -c "[^[:space:]]" "$LIST_FILE")
-                if [ "$ONLINE_COUNT" -le 1 ]; then
-                    > "$LIST_FILE"
-                    echo "[LEAVE] Mapping missing, cleared list." >> tracker_debug.log
-                fi
+                if [ "$ONLINE_COUNT" -le 1 ]; then > "$LIST_FILE"; fi
             fi
         fi
     fi
 done &
+TAIL_PID=$! # Save the background process ID so we can kill it later
 
 # --- Main Discord Loop ---
 while true; do
+    CUR_TIME=$(date +'%T')
+    CLEAN_SNAME=$(echo "${SERVER_NAME:-Soulmask Server}" | tr -d '"' | tr -dc '[:print:]')
+
+    # CHECK FOR SHUTDOWN FLAG
+    if [ -f "$FLAG_FILE" ]; then
+        cat <<EOF > payload.json
+{
+  "username": "$BOT_NAME",
+  "avatar_url": "$BOT_LOGO",
+  "embeds": [{
+    "title": "🎮 Soulmask Live Server Status",
+    "color": 15548997, 
+    "fields": [
+      {"name": "Server Name", "value": "$CLEAN_SNAME", "inline": false},
+      {"name": "Status", "value": "🔴 Offline / Restarting", "inline": true},
+      {"name": "Map", "value": "$DISPLAY_MAP", "inline": true},
+      {"name": "Current Players", "value": "0", "inline": true},
+      {"name": "Online Players", "value": "\`\`\`\nServer is currently offline\n\`\`\`", "inline": false}
+    ],
+    "footer": {"text": "Last Updated: $CUR_TIME | Skye Serve"}
+  }]
+}
+EOF
+        MESSAGE_ID=$(cat "$MSG_ID_FILE")
+        curl -s -o /dev/null -X PATCH -H "Content-Type: application/json" -d @payload.json "${DISCORD_WEBHOOK}/messages/${MESSAGE_ID}"
+        
+        # Clean up and commit script suicide
+        kill $TAIL_PID 2>/dev/null
+        rm -f "$FLAG_FILE"
+        echo "[EXIT] Graceful shutdown complete." >> tracker_debug.log
+        exit 0
+    fi
+
+    # NORMAL ONLINE PAYLOAD
     PLAYERS=$(grep -c "[^[:space:]]" "$LIST_FILE" | awk '{print $1}')
     [ -z "$PLAYERS" ] && PLAYERS=0
 
@@ -100,9 +126,6 @@ while true; do
     else
         FINAL_LIST=$(sed '/^$/d' "$LIST_FILE" | tr -d '"' | paste -sd ',' - | sed 's/,/\\n/g')
     fi
-    
-    CUR_TIME=$(date +'%T')
-    CLEAN_SNAME=$(echo "${SERVER_NAME:-Soulmask Server}" | tr -d '"' | tr -dc '[:print:]')
 
     cat <<EOF > payload.json
 {
@@ -133,5 +156,5 @@ EOF
         [ "$HTTP_CODE" != "200" ] && [ "$HTTP_CODE" != "204" ] && rm -f "$MSG_ID_FILE"
     fi
 
-    sleep 10
+    sleep 5
 done
