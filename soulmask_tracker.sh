@@ -11,6 +11,14 @@ FLAG_FILE="shutdown.flag"
 BOT_NAME="${BOT_NAME:-Skye Serve Monitor}"
 BOT_LOGO="${BOT_LOGO:-https://raw.githubusercontent.com/parkervcp/pterodactyl-images/master/logos/soulmask.png}"
 
+# --- GHOST KILLER ---
+# Kills old duplicate background scripts so they don't turn Discord back to green!
+for pid in $(pgrep -f tracker.sh); do
+    if [ "$pid" != "$$" ] && [ "$pid" != "$PPID" ]; then
+        kill -9 "$pid" 2>/dev/null
+    fi
+done
+
 # 1. CLEAN RESET
 rm -f "$MSG_ID_FILE"
 rm -f "payload.json"
@@ -18,7 +26,7 @@ rm -f "$FLAG_FILE"
 > "$LIST_FILE" 
 touch "$MAP_FILE"
 
-echo "--- Stable Sync Started: $(date) ---" > tracker_debug.log
+echo "--- Stable Tracker Started: $(date) ---" > tracker_debug.log
 
 update_mapping() {
     local raw_line="$1"
@@ -48,7 +56,6 @@ fi
 # --- Background Listener ---
 tail -F -n 0 "$LOG_FILE" 2>/dev/null | while read -r line; do
     
-    # Catch the shutdown command instantly to update Discord ASAP
     if [[ "$line" == *"TRY RUN ADMIN COMMAND: shutdown"* ]] || [[ "$line" == *"LogExit: Exiting."* ]] || [[ "$line" == *"Exiting abnormally"* ]]; then
         echo "[SHUTDOWN] Exit sequence detected!" >> tracker_debug.log
         touch "$FLAG_FILE"
@@ -111,7 +118,7 @@ EOF
             curl -s -o /dev/null -X PATCH -H "Content-Type: application/json" -d @payload.json "${DISCORD_WEBHOOK}/messages/${MESSAGE_ID}"
         fi
         
-        # Cleanly exit the script and let Pterodactyl handle the rest naturally
+        # Cleanly exit the script
         pkill -P $$ 2>/dev/null
         rm -f "$FLAG_FILE"
         exit 0
