@@ -19,7 +19,6 @@ for pid in $(pgrep -f tracker.sh); do
 done
 
 # 1. CLEAN RESET
-rm -f "$MSG_ID_FILE"
 rm -f "payload.json"
 rm -f "$FLAG_FILE"
 > "$LIST_FILE" 
