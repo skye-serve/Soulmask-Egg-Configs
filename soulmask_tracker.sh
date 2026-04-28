@@ -8,8 +8,8 @@ MAP_FILE="steam_id_map.tmp"
 FLAG_FILE="shutdown.flag"
 
 # --- BRANDING ---
-BOT_NAME="${BOT_NAME:-Skye Serve Monitor}"
-BOT_LOGO="${BOT_LOGO:-https://raw.githubusercontent.com/parkervcp/pterodactyl-images/master/logos/soulmask.png}"
+BOT_NAME="Skye Serve Soulmask Monitor"
+BOT_LOGO="https://raw.githubusercontent.com/skye-serve/Soulmask-Egg-Configs/refs/heads/main/78691e4f-a6fd-4d12-ae6d-218f3a9c705c.jpg"
 
 # --- GHOST KILLER ---
 for pid in $(pgrep -f tracker.sh); do
