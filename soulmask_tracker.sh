@@ -49,10 +49,10 @@ fi
 tail -F -n 0 "$LOG_FILE" 2>/dev/null | while read -r line; do
     
     # --- TRUE SHUTDOWN DETECTION ---
-    if [[ "$line" == *"TRY RUN ADMIN COMMAND:"* ]] || [[ "$line" == *"LogExit: Exiting."* ]] || [[ "$line" == *"Exiting abnormally"* ]] || [[ "$line" == *"RequestExit"* ]]; then
-        echo "[SHUTDOWN] Detected stop command or exit signature in log!" >> tracker_debug.log
+    # We now ONLY trigger when the engine proves it has finished saving
+    if [[ "$line" == *"LogExit: Exiting."* ]] || [[ "$line" == *"Exiting abnormally"* ]]; then
+        echo "[SHUTDOWN] Game has safely saved. Initiating container nuke..." >> tracker_debug.log
         touch "$FLAG_FILE"
-        # Instantly kills the 'sleep' in the main loop so it updates Discord immediately
         pkill -P $$ sleep 2>/dev/null
     fi
 
@@ -115,12 +115,13 @@ EOF
             curl -s -o /dev/null -X PATCH -H "Content-Type: application/json" -d @payload.json "${DISCORD_WEBHOOK}/messages/${MESSAGE_ID}"
         fi
         
-        # 3. THE CLEANUP (Only happens during shutdown!)
-        # Assassinate the deadlocked UE4 game and fake screen so the container can close!
-        killall -9 WSServer-Linux-Shipping 2>/dev/null
-        killall -9 Xvfb 2>/dev/null
-        
-        # Kill the script's own background processes
+        # 3. THE CLEANUP (The Zombie Killers)
+        # These commands execute the fake screen, the wrapper, and the log reader
+        # so the container drops the absolute second the engine finishes saving.
+        pkill -f "Xvfb" 2>/dev/null
+        pkill -f "wrapper.sh" 2>/dev/null
+        pkill -f "WSServer" 2>/dev/null
+        pkill -f "tail -F" 2>/dev/null
         pkill -P $$ 2>/dev/null
         rm -f "$FLAG_FILE"
         exit 0
@@ -166,7 +167,5 @@ EOF
         [ "$HTTP_CODE" != "200" ] && [ "$HTTP_CODE" != "204" ] && rm -f "$MSG_ID_FILE"
     fi
 
-    # The tracker sleeps for 5 seconds here. 
-    # If the shutdown command is detected, pkill wakes it up instantly!
     sleep 5
 done
