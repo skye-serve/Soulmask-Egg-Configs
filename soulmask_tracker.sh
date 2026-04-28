@@ -119,20 +119,10 @@ EOF
             curl -s -o /dev/null -X PATCH -H "Content-Type: application/json" -d @payload.json "${DISCORD_WEBHOOK}/messages/${MESSAGE_ID}"
         fi
         
-        # 2. PATIENTLY wait for the game to actually finish saving.
-        echo "Discord updated. Waiting for engine to finish saving..." >> tracker_debug.log
-        while true; do
-            # Check the bottom of the log file to see if Error 110 has popped up yet
-            if tail -n 50 "$LOG_FILE" 2>/dev/null | grep -qE "Exiting abnormally|Game engine shut down"; then
-                echo "Save complete! Executing nuclear strike on PID 1..." >> tracker_debug.log
-                rm -f "$FLAG_FILE"
-                
-                # Detonate the entire container instantly
-                kill -9 1 2>/dev/null
-                exit 0
-            fi
-            sleep 2
-        done
+        # 2. Let Pterodactyl handle the shutdown naturally.
+        echo "Discord updated. Handing off shutdown to Pterodactyl..." >> tracker_debug.log
+        rm -f "$FLAG_FILE"
+        exit 0
     fi
     # === END SHUTDOWN TRIGGER ===
 
