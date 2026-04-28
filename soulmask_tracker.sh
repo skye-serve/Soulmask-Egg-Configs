@@ -51,12 +51,11 @@ fi
 # --- Background Listener ---
 tail -F -n 0 "$LOG_FILE" 2>/dev/null | while read -r line; do
     
-    # --- NEW: TRUE SHUTDOWN DETECTION ---
-    # We look for the exact admin command being logged in WS.log
-    if [[ "$line" == *"TRY RUN ADMIN COMMAND: shutdown"* ]] || [[ "$line" == *"TRY RUN ADMIN COMMAND: Quit"* ]]; then
-        echo "[SHUTDOWN] Detected Pterodactyl stop command in log!" >> tracker_debug.log
+    # --- TRUE SHUTDOWN DETECTION ---
+    if [[ "$line" == *"TRY RUN ADMIN COMMAND:"* ]] || [[ "$line" == *"LogExit: Exiting."* ]] || [[ "$line" == *"Exiting abnormally"* ]] || [[ "$line" == *"RequestExit"* ]]; then
+        echo "[SHUTDOWN] Detected stop command or exit signature in log!" >> tracker_debug.log
         touch "$FLAG_FILE"
-        # This instantly kills the 'sleep 10' in the main loop so it updates Discord immediately
+        # Instantly kills the 'sleep' in the main loop so it updates Discord immediately
         pkill -P $$ sleep 2>/dev/null
     fi
 
@@ -120,13 +119,12 @@ EOF
         fi
         
         # 3. THE CLEANUP (Only happens during shutdown!)
+        # Kills all child processes, including the 'tail' command causing the hang
         pkill -P $$ 2>/dev/null
         rm -f "$FLAG_FILE"
         exit 0
     fi
     # === END OF SHUTDOWN TRIGGER ===
-
-    # ... The rest of the "Normal Online Loop" continues below here ...
 
     # NORMAL ONLINE LOOP
     PLAYERS=$(grep -c "[^[:space:]]" "$LIST_FILE" | awk '{print $1}')
@@ -167,12 +165,7 @@ EOF
         [ "$HTTP_CODE" != "200" ] && [ "$HTTP_CODE" != "204" ] && rm -f "$MSG_ID_FILE"
     fi
 
-    # Kill ALL child processes (including the stubborn 'tail' command)
-        pkill -P $$ 2>/dev/null
-        rm -f "$FLAG_FILE"
-        exit 0
-
-    # The tracker sleeps for 10 seconds here. 
+    # The tracker sleeps for 5 seconds here. 
     # If the shutdown command is detected, pkill wakes it up instantly!
     sleep 5
 done
