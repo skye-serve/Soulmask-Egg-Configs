@@ -21,7 +21,7 @@ rm -f "$FLAG_FILE"
 > "$LIST_FILE" 
 touch "$MAP_FILE"
 
-echo "--- System Started: $(date) ---" > tracker_debug.log
+echo "--- Instant Offline Sync Started: $(date) ---" > tracker_debug.log
 
 update_mapping() {
     local raw_line="$1"
@@ -51,10 +51,13 @@ fi
 # --- Background Listener ---
 tail -F -n 0 "$LOG_FILE" 2>/dev/null | while read -r line; do
     
-    # Shutdown Detection
-    if [[ "$line" == *"FUnixPlatformMisc::RequestExit"* ]]; then
-        echo "[SHUTDOWN] Server exit requested. Stopping tracker..." >> tracker_debug.log
+    # --- NEW: TRUE SHUTDOWN DETECTION ---
+    # We look for the exact admin command being logged in WS.log
+    if [[ "$line" == *"TRY RUN ADMIN COMMAND: shutdown"* ]] || [[ "$line" == *"TRY RUN ADMIN COMMAND: Quit"* ]]; then
+        echo "[SHUTDOWN] Detected Pterodactyl stop command in log!" >> tracker_debug.log
         touch "$FLAG_FILE"
+        # This instantly kills the 'sleep 10' in the main loop so it updates Discord immediately
+        pkill -P $$ sleep 2>/dev/null
     fi
 
     update_mapping "$line"
@@ -80,15 +83,16 @@ tail -F -n 0 "$LOG_FILE" 2>/dev/null | while read -r line; do
         fi
     fi
 done &
-TAIL_PID=$! # Save the background process ID so we can kill it later
+TAIL_PID=$!
 
 # --- Main Discord Loop ---
 while true; do
     CUR_TIME=$(date +'%T')
     CLEAN_SNAME=$(echo "${SERVER_NAME:-Soulmask Server}" | tr -d '"' | tr -dc '[:print:]')
 
-    # CHECK FOR SHUTDOWN FLAG
+    # INSTANT OFFLINE TRIGGER
     if [ -f "$FLAG_FILE" ]; then
+        echo "[EXIT] Pushing RED Offline Status to Discord..." >> tracker_debug.log
         cat <<EOF > payload.json
 {
   "username": "$BOT_NAME",
@@ -107,17 +111,18 @@ while true; do
   }]
 }
 EOF
-        MESSAGE_ID=$(cat "$MSG_ID_FILE")
-        curl -s -o /dev/null -X PATCH -H "Content-Type: application/json" -d @payload.json "${DISCORD_WEBHOOK}/messages/${MESSAGE_ID}"
+        if [ -s "$MSG_ID_FILE" ]; then
+            MESSAGE_ID=$(cat "$MSG_ID_FILE")
+            curl -s -o /dev/null -X PATCH -H "Content-Type: application/json" -d @payload.json "${DISCORD_WEBHOOK}/messages/${MESSAGE_ID}"
+        fi
         
-        # Clean up and commit script suicide
+        # Kill the background listener and exit cleanly
         kill $TAIL_PID 2>/dev/null
         rm -f "$FLAG_FILE"
-        echo "[EXIT] Graceful shutdown complete." >> tracker_debug.log
         exit 0
     fi
 
-    # NORMAL ONLINE PAYLOAD
+    # NORMAL ONLINE LOOP
     PLAYERS=$(grep -c "[^[:space:]]" "$LIST_FILE" | awk '{print $1}')
     [ -z "$PLAYERS" ] && PLAYERS=0
 
@@ -156,5 +161,7 @@ EOF
         [ "$HTTP_CODE" != "200" ] && [ "$HTTP_CODE" != "204" ] && rm -f "$MSG_ID_FILE"
     fi
 
+    # The tracker sleeps for 10 seconds here. 
+    # If the shutdown command is detected, pkill wakes it up instantly!
     sleep 5
 done
