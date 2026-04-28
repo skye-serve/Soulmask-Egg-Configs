@@ -18,7 +18,7 @@ rm -f "$FLAG_FILE"
 > "$LIST_FILE" 
 touch "$MAP_FILE"
 
-echo "--- Instant Offline Sync Started: $(date) ---" > tracker_debug.log
+echo "--- Stable Sync Started: $(date) ---" > tracker_debug.log
 
 update_mapping() {
     local raw_line="$1"
@@ -48,10 +48,9 @@ fi
 # --- Background Listener ---
 tail -F -n 0 "$LOG_FILE" 2>/dev/null | while read -r line; do
     
-    # --- TRUE SHUTDOWN DETECTION ---
-    # We now ONLY trigger when the engine proves it has finished saving
-    if [[ "$line" == *"LogExit: Exiting."* ]] || [[ "$line" == *"Exiting abnormally"* ]]; then
-        echo "[SHUTDOWN] Game has safely saved. Initiating container nuke..." >> tracker_debug.log
+    # Catch the shutdown command instantly to update Discord ASAP
+    if [[ "$line" == *"TRY RUN ADMIN COMMAND: shutdown"* ]] || [[ "$line" == *"LogExit: Exiting."* ]] || [[ "$line" == *"Exiting abnormally"* ]]; then
+        echo "[SHUTDOWN] Exit sequence detected!" >> tracker_debug.log
         touch "$FLAG_FILE"
         pkill -P $$ sleep 2>/dev/null
     fi
@@ -86,11 +85,9 @@ while true; do
     CUR_TIME=$(date +'%T')
     CLEAN_SNAME=$(echo "${SERVER_NAME:-Soulmask Server}" | tr -d '"' | tr -dc '[:print:]')
 
-    # === THIS IS THE SHUTDOWN TRIGGER BLOCK ===
+    # === SHUTDOWN TRIGGER ===
     if [ -f "$FLAG_FILE" ]; then
-        echo "[EXIT] Pushing RED Offline Status to Discord..." >> tracker_debug.log
         
-        # 1. Create the 'Offline' JSON
         cat <<EOF > payload.json
 {
   "username": "$BOT_NAME",
@@ -109,19 +106,17 @@ while true; do
   }]
 }
 EOF
-        # 2. Push the final message to Discord
         if [ -s "$MSG_ID_FILE" ]; then
             MESSAGE_ID=$(cat "$MSG_ID_FILE")
             curl -s -o /dev/null -X PATCH -H "Content-Type: application/json" -d @payload.json "${DISCORD_WEBHOOK}/messages/${MESSAGE_ID}"
         fi
         
-        # 3. THE CLEANUP (The Nuclear Option)
+        # Cleanly exit the script and let Pterodactyl handle the rest naturally
+        pkill -P $$ 2>/dev/null
         rm -f "$FLAG_FILE"
-        
-        # Snipe the container's master process to force an instant close
-        kill -9 1 2>/dev/null
+        exit 0
     fi
-    # === END OF SHUTDOWN TRIGGER ===
+    # === END SHUTDOWN TRIGGER ===
 
     # NORMAL ONLINE LOOP
     PLAYERS=$(grep -c "[^[:space:]]" "$LIST_FILE" | awk '{print $1}')
