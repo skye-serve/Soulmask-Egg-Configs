@@ -90,9 +90,11 @@ while true; do
     CUR_TIME=$(date +'%T')
     CLEAN_SNAME=$(echo "${SERVER_NAME:-Soulmask Server}" | tr -d '"' | tr -dc '[:print:]')
 
-    # INSTANT OFFLINE TRIGGER
+    # === THIS IS THE SHUTDOWN TRIGGER BLOCK ===
     if [ -f "$FLAG_FILE" ]; then
         echo "[EXIT] Pushing RED Offline Status to Discord..." >> tracker_debug.log
+        
+        # 1. Create the 'Offline' JSON
         cat <<EOF > payload.json
 {
   "username": "$BOT_NAME",
@@ -111,16 +113,20 @@ while true; do
   }]
 }
 EOF
+        # 2. Push the final message to Discord
         if [ -s "$MSG_ID_FILE" ]; then
             MESSAGE_ID=$(cat "$MSG_ID_FILE")
             curl -s -o /dev/null -X PATCH -H "Content-Type: application/json" -d @payload.json "${DISCORD_WEBHOOK}/messages/${MESSAGE_ID}"
         fi
         
-        # Kill the background listener and exit cleanly
-        kill $TAIL_PID 2>/dev/null
+        # 3. THE CLEANUP (Only happens during shutdown!)
+        pkill -P $$ 2>/dev/null
         rm -f "$FLAG_FILE"
         exit 0
     fi
+    # === END OF SHUTDOWN TRIGGER ===
+
+    # ... The rest of the "Normal Online Loop" continues below here ...
 
     # NORMAL ONLINE LOOP
     PLAYERS=$(grep -c "[^[:space:]]" "$LIST_FILE" | awk '{print $1}')
@@ -160,6 +166,11 @@ EOF
         HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X PATCH -H "Content-Type: application/json" -d @payload.json "${DISCORD_WEBHOOK}/messages/${MESSAGE_ID}")
         [ "$HTTP_CODE" != "200" ] && [ "$HTTP_CODE" != "204" ] && rm -f "$MSG_ID_FILE"
     fi
+
+    # Kill ALL child processes (including the stubborn 'tail' command)
+        pkill -P $$ 2>/dev/null
+        rm -f "$FLAG_FILE"
+        exit 0
 
     # The tracker sleeps for 10 seconds here. 
     # If the shutdown command is detected, pkill wakes it up instantly!
