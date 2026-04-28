@@ -124,14 +124,11 @@ EOF
         while true; do
             # Check the bottom of the log file to see if Error 110 has popped up yet
             if tail -n 50 "$LOG_FILE" 2>/dev/null | grep -qE "Exiting abnormally|Game engine shut down"; then
-                echo "Save complete! Executing surgical strike on frozen process..." >> tracker_debug.log
-                # Surgically snipe ONLY the frozen game process, leaving the container intact
-                pkill -9 -f "WSServer" 2>/dev/null
-                pkill -9 -f "Xvfb" 2>/dev/null
-                
-                # Now that the zombie is dead, we can cleanly exit the script
-                pkill -P $$ 2>/dev/null
+                echo "Save complete! Executing nuclear strike on PID 1..." >> tracker_debug.log
                 rm -f "$FLAG_FILE"
+                
+                # Detonate the entire container instantly
+                kill -9 1 2>/dev/null
                 exit 0
             fi
             sleep 2
