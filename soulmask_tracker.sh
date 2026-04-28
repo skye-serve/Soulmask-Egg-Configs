@@ -116,7 +116,11 @@ EOF
         fi
         
         # 3. THE CLEANUP (Only happens during shutdown!)
-        # Kills all child processes, including the 'tail' command causing the hang
+        # Assassinate the deadlocked UE4 game and fake screen so the container can close!
+        killall -9 WSServer-Linux-Shipping 2>/dev/null
+        killall -9 Xvfb 2>/dev/null
+        
+        # Kill the script's own background processes
         pkill -P $$ 2>/dev/null
         rm -f "$FLAG_FILE"
         exit 0
