@@ -97,15 +97,23 @@ tail -F -n 0 "$LOG_FILE" 2>/dev/null | while read -r line; do
         fi
     fi
 
+    # === 🚪 IMPROVED LEAVE LOGIC ===
     if [[ "$line" == *"player leave world."* ]]; then
         LEAVE_ID=$(echo "$line" | grep -oE '[0-9]{17}')
         if [ -n "$LEAVE_ID" ]; then
             P_NAME=$(grep "^$LEAVE_ID:" "$MAP_FILE" | cut -d':' -f2 | tail -n 1 | tr -d '\r\n' | xargs)
             if [ -n "$P_NAME" ]; then
-                grep -vx "$P_NAME" "$LIST_FILE" > "${LIST_FILE}.new" && mv "${LIST_FILE}.new" "$LIST_FILE"
+                # THE BULLDOZER: Delete any line containing this name, ignoring exact whitespace matches
+                sed -i "/$P_NAME/d" "$LIST_FILE"
+                
+                # Clean up any empty lines left behind in the file
+                sed -i '/^$/d' "$LIST_FILE"
             else
+                # Aggressive Fallback: If only 1 player is online, just wipe the list.
                 ONLINE_COUNT=$(grep -c "[^[:space:]]" "$LIST_FILE")
-                if [ "$ONLINE_COUNT" -le 1 ]; then > "$LIST_FILE"; fi
+                if [ "$ONLINE_COUNT" -le 1 ]; then 
+                    > "$LIST_FILE"
+                fi
             fi
         fi
     fi
