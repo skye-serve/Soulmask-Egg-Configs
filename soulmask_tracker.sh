@@ -8,8 +8,8 @@ MAP_FILE="steam_id_map.tmp"
 FLAG_FILE="shutdown.flag"
 
 # --- WEBHOOKS ---
-# DISCORD_WEBHOOK is already pulled from your Panel Variables
-# PASTE YOUR CHAT CHANNEL WEBHOOK BELOW:
+# These are pulled from your Panel Variables
+DISCORD_WEBHOOK="${DISCORD_WEBHOOK}"
 CHAT_WEBHOOK="${CHAT_WEBHOOK}"
 
 # --- BRANDING ---
@@ -57,36 +57,31 @@ else
 fi
 
 # --- Background Listener (Status + Chat) ---
-# We use 'tr -d' to strip carriage returns so the string matching is 100% accurate
-tail -F -n 0 "$LOG_FILE" 2>/dev/null | tr -d '\r' | while read -r line; do
-    
+# REMOVED 'tr' from the pipeline to prevent buffering/hanging
+tail -F -n 0 "$LOG_FILE" 2>/dev/null | while read -r line; do
+    # Clean the line inside the loop (strips carriage returns)
+    line="${line//$'\r'/}"
+
     # === 💬 CHAT RELAY LOGIC ===
     if [[ "$line" == *"logWorldChat: Display:"* ]]; then
-        # Debug: Log that we found a potential chat line
-        echo "[CHAT DEBUG] Found line: $line" >> tracker_debug.log
-
-        # Ignore messages sent BY the bot to prevent infinite loops
+        echo "[CHAT DEBUG] Seen in log: $line" >> tracker_debug.log
+        
+        # Loop Prevention: Ignore messages containing [Discord]
         if [[ "$line" != *"[Discord]"* ]]; then
-            # Extract Player Name and Message with safer cleaning
+            # Refined extraction to handle names better
             P_NAME=$(echo "$line" | sed -n 's/.*Display: \[,//;s/(.*//p' | xargs)
             P_MSG=$(echo "$line" | sed -n 's/.*)\]//p' | xargs)
 
             if [ -n "$P_NAME" ] && [ -n "$P_MSG" ]; then
-                echo "[CHAT DEBUG] Sending message from $P_NAME to Discord" >> tracker_debug.log
-                
-                # Send to Discord with a 5-second timeout to prevent hanging the script
-                curl -s --max-time 5 -X POST -H "Content-Type: application/json" \
+                echo "[CHAT DEBUG] Sending message: $P_NAME: $P_MSG" >> tracker_debug.log
+                curl -s --max-time 8 -X POST -H "Content-Type: application/json" \
                 -d "{\"username\": \"$P_NAME\", \"content\": \"$P_MSG\"}" \
                 "$CHAT_WEBHOOK"
-            else
-                echo "[CHAT DEBUG] Extraction failed. Name: '$P_NAME' Msg: '$P_MSG'" >> tracker_debug.log
             fi
-        else
-            echo "[CHAT DEBUG] Ignoring message from Discord to prevent loop." >> tracker_debug.log
         fi
     fi
 
-    # Trigger #1: Catch shutdown
+    # Trigger #1: Catch the shutdown command
     if [[ "$line" == *"TRY RUN ADMIN COMMAND: shutdown"* ]] || [[ "$line" == *"TRY RUN ADMIN COMMAND: Quit"* ]]; then
         echo "[SHUTDOWN] Exit sequence detected!" >> tracker_debug.log
         touch "$FLAG_FILE"
@@ -121,7 +116,11 @@ TAIL_PID=$!
 while true; do
     CUR_TIME=$(date +'%T')
     CLEAN_SNAME=$(echo "${SERVER_NAME:-Soulmask Server}" | tr -d '"' | tr -dc '[:print:]')
+    
+    # Heartbeat to debug log to ensure loop is running
+    echo "[HEARTBEAT] Monitor Loop active at $CUR_TIME" >> tracker_debug.log
 
+    # Check for Shutdown Flag
     if [ -f "$FLAG_FILE" ]; then
         cat <<EOF > payload.json
 {
@@ -149,6 +148,7 @@ EOF
         exit 0
     fi
 
+    # Normal Online Payload...
     PLAYERS=$(grep -c "[^[:space:]]" "$LIST_FILE" | awk '{print $1}')
     [ -z "$PLAYERS" ] && PLAYERS=0
 
