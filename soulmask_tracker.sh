@@ -57,22 +57,32 @@ else
 fi
 
 # --- Background Listener (Status + Chat) ---
-tail -F -n 0 "$LOG_FILE" 2>/dev/null | while read -r line; do
+# We use 'tr -d' to strip carriage returns so the string matching is 100% accurate
+tail -F -n 0 "$LOG_FILE" 2>/dev/null | tr -d '\r' | while read -r line; do
     
     # === 💬 CHAT RELAY LOGIC ===
     if [[ "$line" == *"logWorldChat: Display:"* ]]; then
+        # Debug: Log that we found a potential chat line
+        echo "[CHAT DEBUG] Found line: $line" >> tracker_debug.log
+
         # Ignore messages sent BY the bot to prevent infinite loops
         if [[ "$line" != *"[Discord]"* ]]; then
-            # Extract Player Name and Message
+            # Extract Player Name and Message with safer cleaning
             P_NAME=$(echo "$line" | sed -n 's/.*Display: \[,//;s/(.*//p' | xargs)
             P_MSG=$(echo "$line" | sed -n 's/.*)\]//p' | xargs)
 
             if [ -n "$P_NAME" ] && [ -n "$P_MSG" ]; then
-                # Send to the separate Chat Webhook
-                curl -s -X POST -H "Content-Type: application/json" \
+                echo "[CHAT DEBUG] Sending message from $P_NAME to Discord" >> tracker_debug.log
+                
+                # Send to Discord with a 5-second timeout to prevent hanging the script
+                curl -s --max-time 5 -X POST -H "Content-Type: application/json" \
                 -d "{\"username\": \"$P_NAME\", \"content\": \"$P_MSG\"}" \
                 "$CHAT_WEBHOOK"
+            else
+                echo "[CHAT DEBUG] Extraction failed. Name: '$P_NAME' Msg: '$P_MSG'" >> tracker_debug.log
             fi
+        else
+            echo "[CHAT DEBUG] Ignoring message from Discord to prevent loop." >> tracker_debug.log
         fi
     fi
 
