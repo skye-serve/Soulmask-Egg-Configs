@@ -7,6 +7,11 @@ LIST_FILE="current_players.tmp"
 MAP_FILE="steam_id_map.tmp"
 FLAG_FILE="shutdown.flag"
 
+# --- WEBHOOKS ---
+# DISCORD_WEBHOOK is already pulled from your Panel Variables
+# PASTE YOUR CHAT CHANNEL WEBHOOK BELOW:
+CHAT_WEBHOOK="${CHAT_WEBHOOK}"
+
 # --- BRANDING ---
 BOT_NAME="Skye Serve Soulmask Monitor"
 BOT_LOGO="https://raw.githubusercontent.com/skye-serve/Soulmask-Egg-Configs/refs/heads/main/78691e4f-a6fd-4d12-ae6d-218f3a9c705c.jpg"
@@ -24,7 +29,7 @@ rm -f "$FLAG_FILE"
 > "$LIST_FILE" 
 touch "$MAP_FILE"
 
-echo "--- Stable Tracker Started: $(date) ---" > tracker_debug.log
+echo "--- Stable Tracker & Chat Relay Started: $(date) ---" > tracker_debug.log
 
 update_mapping() {
     local raw_line="$1"
@@ -51,12 +56,29 @@ else
     DISPLAY_MAP="Cloud Mist Forest"
 fi
 
-# --- Background Listener ---
+# --- Background Listener (Status + Chat) ---
 tail -F -n 0 "$LOG_FILE" 2>/dev/null | while read -r line; do
     
-    # Trigger #1: Catch the shutdown command to update Discord IMMEDIATELY
+    # === 💬 CHAT RELAY LOGIC ===
+    if [[ "$line" == *"logWorldChat: Display:"* ]]; then
+        # Ignore messages sent BY the bot to prevent infinite loops
+        if [[ "$line" != *"[Discord]"* ]]; then
+            # Extract Player Name and Message
+            P_NAME=$(echo "$line" | sed -n 's/.*Display: \[,//;s/(.*//p' | xargs)
+            P_MSG=$(echo "$line" | sed -n 's/.*)\]//p' | xargs)
+
+            if [ -n "$P_NAME" ] && [ -n "$P_MSG" ]; then
+                # Send to the separate Chat Webhook
+                curl -s -X POST -H "Content-Type: application/json" \
+                -d "{\"username\": \"$P_NAME\", \"content\": \"$P_MSG\"}" \
+                "$CHAT_WEBHOOK"
+            fi
+        fi
+    fi
+
+    # Trigger #1: Catch shutdown
     if [[ "$line" == *"TRY RUN ADMIN COMMAND: shutdown"* ]] || [[ "$line" == *"TRY RUN ADMIN COMMAND: Quit"* ]]; then
-        echo "[SHUTDOWN] Exit sequence detected! Flagging for Discord update..." >> tracker_debug.log
+        echo "[SHUTDOWN] Exit sequence detected!" >> tracker_debug.log
         touch "$FLAG_FILE"
         pkill -P $$ sleep 2>/dev/null
     fi
@@ -76,7 +98,6 @@ tail -F -n 0 "$LOG_FILE" 2>/dev/null | while read -r line; do
             P_NAME=$(grep "^$LEAVE_ID:" "$MAP_FILE" | cut -d':' -f2 | tail -n 1 | tr -d '\r\n' | xargs)
             if [ -n "$P_NAME" ]; then
                 grep -vx "$P_NAME" "$LIST_FILE" > "${LIST_FILE}.new" && mv "${LIST_FILE}.new" "$LIST_FILE"
-                if grep -qx "$P_NAME" "$LIST_FILE"; then sed -i "/$P_NAME/d" "$LIST_FILE"; fi
             else
                 ONLINE_COUNT=$(grep -c "[^[:space:]]" "$LIST_FILE")
                 if [ "$ONLINE_COUNT" -le 1 ]; then > "$LIST_FILE"; fi
@@ -86,15 +107,12 @@ tail -F -n 0 "$LOG_FILE" 2>/dev/null | while read -r line; do
 done &
 TAIL_PID=$!
 
-# --- Main Discord Loop ---
+# --- Main Discord Loop (Status Embed) ---
 while true; do
     CUR_TIME=$(date +'%T')
     CLEAN_SNAME=$(echo "${SERVER_NAME:-Soulmask Server}" | tr -d '"' | tr -dc '[:print:]')
 
-    # === SHUTDOWN TRIGGER ===
     if [ -f "$FLAG_FILE" ]; then
-        
-        # 1. Update Discord to RED immediately
         cat <<EOF > payload.json
 {
   "username": "$BOT_NAME",
@@ -117,15 +135,10 @@ EOF
             MESSAGE_ID=$(cat "$MSG_ID_FILE")
             curl -s -o /dev/null -X PATCH -H "Content-Type: application/json" -d @payload.json "${DISCORD_WEBHOOK}/messages/${MESSAGE_ID}"
         fi
-        
-        # 2. Let Pterodactyl handle the shutdown naturally.
-        echo "Discord updated. Handing off shutdown to Pterodactyl..." >> tracker_debug.log
         rm -f "$FLAG_FILE"
         exit 0
     fi
-    # === END SHUTDOWN TRIGGER ===
 
-    # NORMAL ONLINE LOOP
     PLAYERS=$(grep -c "[^[:space:]]" "$LIST_FILE" | awk '{print $1}')
     [ -z "$PLAYERS" ] && PLAYERS=0
 
@@ -161,11 +174,7 @@ EOF
     else
         MESSAGE_ID=$(cat "$MSG_ID_FILE")
         HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X PATCH -H "Content-Type: application/json" -d @payload.json "${DISCORD_WEBHOOK}/messages/${MESSAGE_ID}")
-        
-        # Only delete the message ID if Discord explicitly says the message no longer exists (404)
-        if [ "$HTTP_CODE" == "404" ]; then 
-            rm -f "$MSG_ID_FILE"
-        fi
+        if [ "$HTTP_CODE" == "404" ]; then rm -f "$MSG_ID_FILE"; fi
     fi
 
     sleep 5
