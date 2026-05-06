@@ -11,6 +11,7 @@ FLAG_FILE="shutdown.flag"
 # These are pulled from your Panel Variables
 DISCORD_WEBHOOK="${DISCORD_WEBHOOK}"
 CHAT_WEBHOOK="${CHAT_WEBHOOK}"
+LOG_WEBHOOK="${LOG_WEBHOOK}"
 
 # --- BRANDING ---
 BOT_NAME="Skye Serve Soulmask Monitor"
@@ -62,7 +63,7 @@ tail -F -n 0 "$LOG_FILE" 2>/dev/null | while read -r line; do
     # Clean the line inside the loop (strips carriage returns)
     line="${line//$'\r'/}"
 
-    # === 💬 CHAT RELAY LOGIC ===
+    # === 💬 CHAT RELAY LOGIC (WITH ECHO PREVENTION) ===
     if [[ "$line" == *"logWorldChat: Display:"* ]]; then
         echo "[CHAT DEBUG] Seen in log: $line" >> tracker_debug.log
         
@@ -74,8 +75,12 @@ tail -F -n 0 "$LOG_FILE" 2>/dev/null | while read -r line; do
 
             if [ -n "$P_NAME" ] && [ -n "$P_MSG" ]; then
                 echo "[CHAT DEBUG] Sending message: $P_NAME: $P_MSG" >> tracker_debug.log
+                
+                # Grab the Server Name quickly for the Echo Prevention tag
+                TEMP_SNAME=$(echo "${SERVER_NAME:-Soulmask Server}" | tr -d '"' | tr -dc '[:print:]')
+
                 curl -s --max-time 8 -X POST -H "Content-Type: application/json" \
-                -d "{\"username\": \"$P_NAME\", \"content\": \"$P_MSG\"}" \
+                -d "{\"username\": \"$P_NAME [$TEMP_SNAME]\", \"content\": \"$P_MSG\"}" \
                 "$CHAT_WEBHOOK"
             fi
         fi
@@ -90,6 +95,33 @@ tail -F -n 0 "$LOG_FILE" 2>/dev/null | while read -r line; do
 
     update_mapping "$line"
 
+    # ----------------------------------------------------
+    # 📝 PLAYER CONNECTION LOGS (Joins -> #cluster-logs)
+    # ----------------------------------------------------
+    if [[ "$line" == *"player ready."* ]]; then
+        JOIN_NAME=$(echo "$line" | sed -n 's/.*Name:\(.*\)/\1/p' | tr -d '\r\n' | xargs)
+        JOIN_ID=$(echo "$line" | sed -n 's/.*Netuid:\([0-9]*\).*/\1/p' | tr -d '\r\n ')
+        
+        if [ -n "$JOIN_NAME" ] && [ -n "$LOG_WEBHOOK" ]; then
+            TEMP_SNAME=$(echo "${SERVER_NAME:-Soulmask Server}" | tr -d '"' | tr -dc '[:print:]')
+            
+            cat <<EOF > join_payload.json
+{
+  "embeds": [{
+    "title": "🟢 Player Joined",
+    "color": 3066993,
+    "fields": [
+      {"name": "Player", "value": "$JOIN_NAME", "inline": true},
+      {"name": "Steam ID", "value": "$JOIN_ID", "inline": true},
+      {"name": "Server", "value": "$TEMP_SNAME", "inline": false}
+    ]
+  }]
+}
+EOF
+            curl -s --max-time 5 -H "Content-Type: application/json" -X POST -d @join_payload.json "$LOG_WEBHOOK"
+        fi
+    fi
+
     if [[ "$line" == *"Join succeeded:"* ]]; then
         NAME=$(echo "$line" | sed 's/.*Join succeeded: //' | tr -d '\r\n' | tr -d '"' | tr -d "'" | xargs)
         if [ -n "$NAME" ] && ! grep -qx "$NAME" "$LIST_FILE"; then
@@ -97,7 +129,7 @@ tail -F -n 0 "$LOG_FILE" 2>/dev/null | while read -r line; do
         fi
     fi
 
-    # === 🚪 IMPROVED LEAVE LOGIC ===
+    # === 🚪 IMPROVED LEAVE LOGIC + LEAVE LOGS ===
     if [[ "$line" == *"player leave world."* ]]; then
         LEAVE_ID=$(echo "$line" | grep -oE '[0-9]{17}')
         if [ -n "$LEAVE_ID" ]; then
@@ -108,6 +140,28 @@ tail -F -n 0 "$LOG_FILE" 2>/dev/null | while read -r line; do
                 
                 # Clean up any empty lines left behind in the file
                 sed -i '/^$/d' "$LIST_FILE"
+
+                # ----------------------------------------------------
+                # 📝 PLAYER CONNECTION LOGS (Leaves -> #cluster-logs)
+                # ----------------------------------------------------
+                if [ -n "$LOG_WEBHOOK" ]; then
+                    TEMP_SNAME=$(echo "${SERVER_NAME:-Soulmask Server}" | tr -d '"' | tr -dc '[:print:]')
+                    cat <<EOF > leave_payload.json
+{
+  "embeds": [{
+    "title": "🔴 Player Left",
+    "color": 15548997,
+    "fields": [
+      {"name": "Player", "value": "$P_NAME", "inline": true},
+      {"name": "Steam ID", "value": "$LEAVE_ID", "inline": true},
+      {"name": "Server", "value": "$TEMP_SNAME", "inline": false}
+    ]
+  }]
+}
+EOF
+                    curl -s --max-time 5 -H "Content-Type: application/json" -X POST -d @leave_payload.json "$LOG_WEBHOOK"
+                fi
+
             else
                 # Aggressive Fallback: If only 1 player is online, just wipe the list.
                 ONLINE_COUNT=$(grep -c "[^[:space:]]" "$LIST_FILE")
