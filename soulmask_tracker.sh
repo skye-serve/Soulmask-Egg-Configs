@@ -69,9 +69,9 @@ tail -F -n 0 "$LOG_FILE" 2>/dev/null | while read -r line; do
         
         # Loop Prevention: Ignore messages containing [Discord]
         if [[ "$line" != *"[Discord]"* ]]; then
-            # Refined extraction to handle names better
-            P_NAME=$(echo "$line" | sed -n 's/.*Display: \[,//;s/(.*//p' | xargs)
-            P_MSG=$(echo "$line" | sed -n 's/.*)\]//p' | xargs)
+            # Refined extraction to handle names better (Updated for new Soulmask log format)
+            P_NAME=$(echo "$line" | sed -n 's/.*Display: \[\(.*\)(.*/\1/p' | xargs)
+            P_MSG=$(echo "$line" | sed -n 's/.*)\]\(.*\)/\1/p' | xargs)
 
             if [ -n "$P_NAME" ] && [ -n "$P_MSG" ]; then
                 echo "[CHAT DEBUG] Sending message: $P_NAME: $P_MSG" >> tracker_debug.log
@@ -232,7 +232,7 @@ EOF
       {"name": "Status", "value": "🟢 Online", "inline": true},
       {"name": "Map", "value": "$DISPLAY_MAP", "inline": true},
       {"name": "Current Players", "value": "$PLAYERS", "inline": true},
-      {"name": "Online Players", "value": "\`\`\`\\n$FINAL_LIST\\n\`\`\`", "inline": false}
+      {"name": "Online Players", "value": "\`\`\`\n$FINAL_LIST\n\`\`\`", "inline": false}
     ],
     "footer": {"text": "Last Updated: $CUR_TIME | Skye Serve"}
   }]
