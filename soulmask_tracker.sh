@@ -18,6 +18,7 @@ BOT_NAME="Skye Serve Soulmask Monitor"
 BOT_LOGO="https://raw.githubusercontent.com/skye-serve/Soulmask-Egg-Configs/refs/heads/main/78691e4f-a6fd-4d12-ae6d-218f3a9c705c.jpg"
 
 # --- GHOST KILLER ---
+# Ensures only one instance of the tracker runs at a time
 for pid in $(pgrep -f tracker.sh); do
     if [ "$pid" != "$$" ] && [ "$pid" != "$PPID" ]; then
         kill -9 "$pid" 2>/dev/null
@@ -46,7 +47,7 @@ update_mapping() {
     fi
 }
 
-# PRE-SCAN
+# PRE-SCAN existing logs to map players who were already online
 while read -r line; do update_mapping "$line"; done < "$LOG_FILE"
 
 if [ "$SERVER_MAP" == "Level01_Main" ]; then
@@ -58,25 +59,24 @@ else
 fi
 
 # --- Background Listener (Status + Chat) ---
-# REMOVED 'tr' from the pipeline to prevent buffering/hanging
 tail -F -n 0 "$LOG_FILE" 2>/dev/null | while read -r line; do
-    # Clean the line inside the loop (strips carriage returns)
+    # Clean the line (strips Windows carriage returns)
     line="${line//$'\r'/}"
 
-    # === 💬 CHAT RELAY LOGIC (WITH ECHO PREVENTION) ===
+    # === 💬 CHAT RELAY LOGIC (WITH TRIBE/SOLO DETECTION) ===
     if [[ "$line" == *"logWorldChat: Display:"* ]]; then
         echo "[CHAT DEBUG] Seen in log: $line" >> tracker_debug.log
         
-        # Loop Prevention: Ignore messages containing [Discord]
+        # Loop Prevention: Ignore messages already echoed from Discord
         if [[ "$line" != *"[Discord]"* ]]; then
-            # Refined extraction to handle names better (Updated for new Soulmask log format)
-            P_NAME=$(echo "$line" | sed -n 's/.*Display: \[\(.*\)(.*/\1/p' | xargs)
+            # NEW LOGIC: Captures name/tribe, then strips the leading comma if the player is solo
+            P_NAME=$(echo "$line" | sed -n 's/.*Display: \[\(.*\)(.*/\1/p' | sed 's/^,//' | xargs)
             P_MSG=$(echo "$line" | sed -n 's/.*)\]\(.*\)/\1/p' | xargs)
 
             if [ -n "$P_NAME" ] && [ -n "$P_MSG" ]; then
                 echo "[CHAT DEBUG] Sending message: $P_NAME: $P_MSG" >> tracker_debug.log
                 
-                # Grab the Server Name quickly for the Echo Prevention tag
+                # Grab the Server Name for the Discord Display tag
                 TEMP_SNAME=$(echo "${SERVER_NAME:-Soulmask Server}" | tr -d '"' | tr -dc '[:print:]')
 
                 curl -s --max-time 8 -X POST -H "Content-Type: application/json" \
@@ -86,7 +86,7 @@ tail -F -n 0 "$LOG_FILE" 2>/dev/null | while read -r line; do
         fi
     fi
 
-    # Trigger #1: Catch the shutdown command
+    # Trigger: Catch the shutdown command to update status embed before exit
     if [[ "$line" == *"TRY RUN ADMIN COMMAND: shutdown"* ]] || [[ "$line" == *"TRY RUN ADMIN COMMAND: Quit"* ]]; then
         echo "[SHUTDOWN] Exit sequence detected!" >> tracker_debug.log
         touch "$FLAG_FILE"
@@ -95,9 +95,7 @@ tail -F -n 0 "$LOG_FILE" 2>/dev/null | while read -r line; do
 
     update_mapping "$line"
 
-    # ----------------------------------------------------
-    # 📝 PLAYER CONNECTION LOGS (Joins -> #cluster-logs)
-    # ----------------------------------------------------
+    # --- Player Connection Logs (Joins) ---
     if [[ "$line" == *"player ready."* ]]; then
         JOIN_NAME=$(echo "$line" | sed -n 's/.*Name:\(.*\)/\1/p' | tr -d '\r\n' | xargs)
         JOIN_ID=$(echo "$line" | sed -n 's/.*Netuid:\([0-9]*\).*/\1/p' | tr -d '\r\n ')
@@ -129,21 +127,15 @@ EOF
         fi
     fi
 
-    # === 🚪 IMPROVED LEAVE LOGIC + LEAVE LOGS ===
+    # --- Player Connection Logs (Leaves) ---
     if [[ "$line" == *"player leave world."* ]]; then
         LEAVE_ID=$(echo "$line" | grep -oE '[0-9]{17}')
         if [ -n "$LEAVE_ID" ]; then
             P_NAME=$(grep "^$LEAVE_ID:" "$MAP_FILE" | cut -d':' -f2 | tail -n 1 | tr -d '\r\n' | xargs)
             if [ -n "$P_NAME" ]; then
-                # THE BULLDOZER: Delete any line containing this name, ignoring exact whitespace matches
                 sed -i "/$P_NAME/d" "$LIST_FILE"
-                
-                # Clean up any empty lines left behind in the file
                 sed -i '/^$/d' "$LIST_FILE"
 
-                # ----------------------------------------------------
-                # 📝 PLAYER CONNECTION LOGS (Leaves -> #cluster-logs)
-                # ----------------------------------------------------
                 if [ -n "$LOG_WEBHOOK" ]; then
                     TEMP_SNAME=$(echo "${SERVER_NAME:-Soulmask Server}" | tr -d '"' | tr -dc '[:print:]')
                     cat <<EOF > leave_payload.json
@@ -161,9 +153,7 @@ EOF
 EOF
                     curl -s --max-time 5 -H "Content-Type: application/json" -X POST -d @leave_payload.json "$LOG_WEBHOOK"
                 fi
-
             else
-                # Aggressive Fallback: If only 1 player is online, just wipe the list.
                 ONLINE_COUNT=$(grep -c "[^[:space:]]" "$LIST_FILE")
                 if [ "$ONLINE_COUNT" -le 1 ]; then 
                     > "$LIST_FILE"
@@ -179,10 +169,8 @@ while true; do
     CUR_TIME=$(date +'%T')
     CLEAN_SNAME=$(echo "${SERVER_NAME:-Soulmask Server}" | tr -d '"' | tr -dc '[:print:]')
     
-    # Heartbeat to debug log to ensure loop is running
     echo "[HEARTBEAT] Monitor Loop active at $CUR_TIME" >> tracker_debug.log
 
-    # Check for Shutdown Flag
     if [ -f "$FLAG_FILE" ]; then
         cat <<EOF > payload.json
 {
@@ -204,13 +192,13 @@ while true; do
 EOF
         if [ -s "$MSG_ID_FILE" ]; then
             MESSAGE_ID=$(cat "$MSG_ID_FILE")
-            curl -s -o /dev/null -X PATCH -H "Content-Type: application/json" -d @payload.json "${DISCORD_WEBHOOK}/messages/${MESSAGE_ID}"
+            curl -s -o /dev/null -X PATCH -H "Content-Type: application/json" \
+            -d @payload.json "${DISCORD_WEBHOOK}/messages/${MESSAGE_ID}"
         fi
         rm -f "$FLAG_FILE"
         exit 0
     fi
 
-    # Normal Online Payload...
     PLAYERS=$(grep -c "[^[:space:]]" "$LIST_FILE" | awk '{print $1}')
     [ -z "$PLAYERS" ] && PLAYERS=0
 
@@ -245,7 +233,8 @@ EOF
         if [[ "$NEW_ID" =~ ^[0-9]+$ ]]; then echo "$NEW_ID" > "$MSG_ID_FILE"; fi
     else
         MESSAGE_ID=$(cat "$MSG_ID_FILE")
-        HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X PATCH -H "Content-Type: application/json" -d @payload.json "${DISCORD_WEBHOOK}/messages/${MESSAGE_ID}")
+        HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X PATCH -H "Content-Type: application/json" \
+        -d @payload.json "${DISCORD_WEBHOOK}/messages/${MESSAGE_ID}")
         if [ "$HTTP_CODE" == "404" ]; then rm -f "$MSG_ID_FILE"; fi
     fi
 
