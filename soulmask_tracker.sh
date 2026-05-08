@@ -69,18 +69,32 @@ tail -F -n 0 "$LOG_FILE" 2>/dev/null | while read -r line; do
         
         # Loop Prevention: Ignore messages already echoed from Discord
         if [[ "$line" != *"[Discord]"* ]]; then
-            # NEW LOGIC: Captures name/tribe, then strips the leading comma if the player is solo
-            P_NAME=$(echo "$line" | sed -n 's/.*Display: \[\(.*\)(.*/\1/p' | sed 's/^,//' | xargs)
-            P_MSG=$(echo "$line" | sed -n 's/.*)\]\(.*\)/\1/p' | xargs)
+            
+            # Extracts everything inside the first set of brackets after "Display: "
+            RAW_BRACKET=$(echo "$line" | grep -oP '(?<=Display: \[).*?(?=\])' | head -n 1)
+            
+            # Extracts the message safely, even if they type brackets inside their chat
+            P_MSG=$(echo "$line" | sed 's/^.*Display: \[[^]]*\]//' | xargs)
+            
+            # If the bracket has a comma, they are in a tribe. We isolate the Character Name.
+            P_NAME=$(echo "$RAW_BRACKET" | sed 's/.*,//' | sed 's/(.*//' | xargs)
+
+            # Fallback: If P_NAME is somehow blank, use the whole bracket content minus the SteamID
+            if [ -z "$P_NAME" ]; then
+                 P_NAME=$(echo "$RAW_BRACKET" | sed 's/(.*//' | xargs)
+            fi
 
             if [ -n "$P_NAME" ] && [ -n "$P_MSG" ]; then
                 echo "[CHAT DEBUG] Sending message: $P_NAME: $P_MSG" >> tracker_debug.log
                 
-                # Grab the Server Name for the Discord Display tag
+                # Format Server Name
                 TEMP_SNAME=$(echo "${SERVER_NAME:-Soulmask Server}" | tr -d '"' | tr -dc '[:print:]')
 
+                # Escape quotes in the message so it doesn't break the Discord JSON payload
+                CLEAN_MSG=$(echo "$P_MSG" | sed 's/"/\\"/g')
+
                 curl -s --max-time 8 -X POST -H "Content-Type: application/json" \
-                -d "{\"username\": \"$P_NAME [$TEMP_SNAME]\", \"content\": \"$P_MSG\"}" \
+                -d "{\"username\": \"$P_NAME [$TEMP_SNAME]\", \"content\": \"$CLEAN_MSG\"}" \
                 "$CHAT_WEBHOOK"
             fi
         fi
