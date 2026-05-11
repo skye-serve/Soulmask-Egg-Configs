@@ -8,7 +8,6 @@ MAP_FILE="steam_id_map.tmp"
 FLAG_FILE="shutdown.flag"
 
 # --- WEBHOOKS ---
-# These are pulled from your Panel Variables
 DISCORD_WEBHOOK="${DISCORD_WEBHOOK}"
 CHAT_WEBHOOK="${CHAT_WEBHOOK}"
 LOG_WEBHOOK="${LOG_WEBHOOK}"
@@ -18,7 +17,6 @@ BOT_NAME="Skye Serve Soulmask Monitor"
 BOT_LOGO="https://raw.githubusercontent.com/skye-serve/Soulmask-Egg-Configs/refs/heads/main/78691e4f-a6fd-4d12-ae6d-218f3a9c705c.jpg"
 
 # --- GHOST KILLER ---
-# Ensures only one instance of the tracker runs at a time
 for pid in $(pgrep -f tracker.sh); do
     if [ "$pid" != "$$" ] && [ "$pid" != "$PPID" ]; then
         kill -9 "$pid" 2>/dev/null
@@ -60,37 +58,21 @@ fi
 
 # --- Background Listener (Status + Chat) ---
 tail -F -n 0 "$LOG_FILE" 2>/dev/null | while read -r line; do
-    # Clean the line (strips Windows carriage returns)
     line="${line//$'\r'/}"
 
-    # === 💬 CHAT RELAY LOGIC (WITH TRIBE/SOLO DETECTION) ===
+    # === 💬 CHAT RELAY LOGIC ===
     if [[ "$line" == *"logWorldChat: Display:"* ]]; then
-        echo "[CHAT DEBUG] Seen in log: $line" >> tracker_debug.log
-        
-        # Loop Prevention: Ignore messages already echoed from Discord
         if [[ "$line" != *"[Discord]"* ]]; then
-            
-            # Extracts everything inside the first set of brackets after "Display: "
             RAW_BRACKET=$(echo "$line" | grep -oP '(?<=Display: \[).*?(?=\])' | head -n 1)
-            
-            # Extracts the message safely, even if they type brackets inside their chat
             P_MSG=$(echo "$line" | sed 's/^.*Display: \[[^]]*\]//' | xargs)
-            
-            # If the bracket has a comma, they are in a tribe. We isolate the Character Name.
             P_NAME=$(echo "$RAW_BRACKET" | sed 's/.*,//' | sed 's/(.*//' | xargs)
 
-            # Fallback: If P_NAME is somehow blank, use the whole bracket content minus the SteamID
             if [ -z "$P_NAME" ]; then
                  P_NAME=$(echo "$RAW_BRACKET" | sed 's/(.*//' | xargs)
             fi
 
             if [ -n "$P_NAME" ] && [ -n "$P_MSG" ]; then
-                echo "[CHAT DEBUG] Sending message: $P_NAME: $P_MSG" >> tracker_debug.log
-                
-                # Format Server Name
                 TEMP_SNAME=$(echo "${SERVER_NAME:-Soulmask Server}" | tr -d '"' | tr -dc '[:print:]')
-
-                # Escape quotes in the message so it doesn't break the Discord JSON payload
                 CLEAN_MSG=$(echo "$P_MSG" | sed 's/"/\\"/g')
 
                 curl -s --max-time 8 -X POST -H "Content-Type: application/json" \
@@ -100,23 +82,21 @@ tail -F -n 0 "$LOG_FILE" 2>/dev/null | while read -r line; do
         fi
     fi
 
-    # Trigger: Catch the shutdown command to update status embed before exit
+    # Trigger: Catch the shutdown command
     if [[ "$line" == *"TRY RUN ADMIN COMMAND: shutdown"* ]] || [[ "$line" == *"TRY RUN ADMIN COMMAND: Quit"* ]]; then
-        echo "[SHUTDOWN] Exit sequence detected!" >> tracker_debug.log
         touch "$FLAG_FILE"
         pkill -P $$ sleep 2>/dev/null
     fi
 
     update_mapping "$line"
 
-    # --- Player Connection Logs (Joins) ---
+    # --- Player Joins ---
     if [[ "$line" == *"player ready."* ]]; then
         JOIN_NAME=$(echo "$line" | sed -n 's/.*Name:\(.*\)/\1/p' | tr -d '\r\n' | xargs)
         JOIN_ID=$(echo "$line" | sed -n 's/.*Netuid:\([0-9]*\).*/\1/p' | tr -d '\r\n ')
         
         if [ -n "$JOIN_NAME" ] && [ -n "$LOG_WEBHOOK" ]; then
             TEMP_SNAME=$(echo "${SERVER_NAME:-Soulmask Server}" | tr -d '"' | tr -dc '[:print:]')
-            
             cat <<EOF > join_payload.json
 {
   "embeds": [{
@@ -141,7 +121,7 @@ EOF
         fi
     fi
 
-    # --- Player Connection Logs (Leaves) ---
+    # --- Player Leaves ---
     if [[ "$line" == *"player leave world."* ]]; then
         LEAVE_ID=$(echo "$line" | grep -oE '[0-9]{17}')
         if [ -n "$LEAVE_ID" ]; then
@@ -182,8 +162,6 @@ TAIL_PID=$!
 while true; do
     CUR_TIME=$(date +'%T')
     CLEAN_SNAME=$(echo "${SERVER_NAME:-Soulmask Server}" | tr -d '"' | tr -dc '[:print:]')
-    
-    echo "[HEARTBEAT] Monitor Loop active at $CUR_TIME" >> tracker_debug.log
 
     if [ -f "$FLAG_FILE" ]; then
         cat <<EOF > payload.json
@@ -198,7 +176,8 @@ while true; do
       {"name": "Status", "value": "🔴 Offline / Restarting", "inline": true},
       {"name": "Map", "value": "$DISPLAY_MAP", "inline": true},
       {"name": "Current Players", "value": "0", "inline": true},
-      {"name": "Online Players", "value": "\`\`\`\nServer is currently offline\n\`\`\`", "inline": false}
+      {"name": "Online Players", "value": "\`\`\`\nServer is currently offline\n\`\`\`", "inline": false},
+      {"name": "Recently Offline", "value": "\`\`\`\nServer is currently offline\n\`\`\`", "inline": false}
     ],
     "footer": {"text": "Last Updated: $CUR_TIME | Skye Serve"}
   }]
@@ -206,8 +185,7 @@ while true; do
 EOF
         if [ -s "$MSG_ID_FILE" ]; then
             MESSAGE_ID=$(cat "$MSG_ID_FILE")
-            curl -s -o /dev/null -X PATCH -H "Content-Type: application/json" \
-            -d @payload.json "${DISCORD_WEBHOOK}/messages/${MESSAGE_ID}"
+            curl -s -o /dev/null -X PATCH -H "Content-Type: application/json" -d @payload.json "${DISCORD_WEBHOOK}/messages/${MESSAGE_ID}"
         fi
         rm -f "$FLAG_FILE"
         exit 0
@@ -216,10 +194,25 @@ EOF
     PLAYERS=$(grep -c "[^[:space:]]" "$LIST_FILE" | awk '{print $1}')
     [ -z "$PLAYERS" ] && PLAYERS=0
 
+    # 1. Format Online Players
     if [ "$PLAYERS" -eq 0 ]; then
         FINAL_LIST="None online"
     else
         FINAL_LIST=$(sed '/^$/d' "$LIST_FILE" | tr -d '"' | paste -sd ',' - | sed 's/,/\\n/g')
+    fi
+
+    # 2. Format Past/Offline Players (Last 20 to protect Discord character limits)
+    if [ -s "$MAP_FILE" ]; then
+        if [ "$PLAYERS" -eq 0 ]; then
+            # If no one is online, just show the last 20 from the map
+            OFFLINE_LIST=$(cut -d':' -f2 "$MAP_FILE" | tail -n 20 | tr -d '"' | paste -sd ',' - | sed 's/,/\\n/g')
+        else
+            # Filter out anyone currently online so they don't appear in both lists
+            OFFLINE_LIST=$(cut -d':' -f2 "$MAP_FILE" | grep -v -F -x -f "$LIST_FILE" | tail -n 20 | tr -d '"' | paste -sd ',' - | sed 's/,/\\n/g')
+        fi
+        [ -z "$OFFLINE_LIST" ] && OFFLINE_LIST="None"
+    else
+        OFFLINE_LIST="None"
     fi
 
     cat <<EOF > payload.json
@@ -234,7 +227,8 @@ EOF
       {"name": "Status", "value": "🟢 Online", "inline": true},
       {"name": "Map", "value": "$DISPLAY_MAP", "inline": true},
       {"name": "Current Players", "value": "$PLAYERS", "inline": true},
-      {"name": "Online Players", "value": "\`\`\`\n$FINAL_LIST\n\`\`\`", "inline": false}
+      {"name": "Online Players", "value": "\`\`\`\n$FINAL_LIST\n\`\`\`", "inline": false},
+      {"name": "Recently Offline", "value": "\`\`\`\n$OFFLINE_LIST\n\`\`\`", "inline": false}
     ],
     "footer": {"text": "Last Updated: $CUR_TIME | Skye Serve"}
   }]
